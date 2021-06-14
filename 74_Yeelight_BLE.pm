@@ -287,6 +287,8 @@ sub Yeelight_BLE_Set($@) {
 	
 	my $supported_cmd=0;
 	
+	return 0 if ( IsDisabled($name) );
+	
 	foreach my $command (keys %{$hash->{helper}{Set_CommandSet}}) {
 		
 		$command=~s/:.*//;
