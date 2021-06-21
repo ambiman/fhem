@@ -29,15 +29,15 @@ use POSIX;
 import JSON::XS;
 
 my %Gardena_BLE_Models = (
-    watercontrol => {
-        'whandle'		=> '0x0071',
+	watercontrol => {
+		'whandle'		=> '0x0071',
 		'timestamp'		=> '0x0031',
 		'battery'		=> '0x0029', ##Most likely the battery - or it's 0x002f
 		'state'			=> '0x006b',
 		'duration'		=> '0x0071',
 		#'laststop'	 	=> '0x003a', ##TODO: History sprinkler data ?
 		'ctrlunitstate'	=> '0x006e'
-    }
+	}
 );
 
 my %Gardena_BLE_Set_Opts = (
@@ -68,19 +68,19 @@ my %Gardena_BLE_Get_Opts = (
 sub GardenaBLEDevice_Initialize($) {
     my ($hash) = @_;
 
-    $hash->{SetFn}    = "Gardena_BLE_Set";
-    $hash->{GetFn}    = "Gardena_BLE_Get";
-    $hash->{DefFn}    = "Gardena_BLE_Define";
-    $hash->{NotifyFn} = "Gardena_BLE_Notify";
-    $hash->{UndefFn}  = "Gardena_BLE_Undef";
-    $hash->{AttrFn}   = "Gardena_BLE_Attr";
-    $hash->{AttrList} =
-        "disable:1 "
-      . "interval "
-	  . "default-on-time "
-      . "hciDevice:hci0,hci1,hci2 "
-      . "blockingCallLoglevel:2,3,4,5 "
-      . $readingFnAttributes;
+	$hash->{SetFn}    = "Gardena_BLE_Set";
+	$hash->{GetFn}    = "Gardena_BLE_Get";
+	$hash->{DefFn}    = "Gardena_BLE_Define";
+	$hash->{NotifyFn} = "Gardena_BLE_Notify";
+	$hash->{UndefFn}  = "Gardena_BLE_Undef";
+	$hash->{AttrFn}   = "Gardena_BLE_Attr";
+	$hash->{AttrList} =
+		"disable:1 "
+		. "interval "
+		. "default-on-time "
+		. "hciDevice:hci0,hci1,hci2 "
+		. "blockingCallLoglevel:2,3,4,5 "
+		. $readingFnAttributes;
 }
 
 # declare prototype
@@ -88,25 +88,25 @@ sub Gardena_BLE_ExecGatttool_Run($);
 
 sub Gardena_BLE_Define($$) {
 
-    my ( $hash, $def ) = @_;
-    my @param = split('[ \t]+', $def );
- 	
+	my ( $hash, $def ) = @_;
+	my @param = split('[ \t]+', $def );
+
 	return "too few parameters: define <name> Gardena_BLE <BTMAC> <MODEL>" if ( @param != 4 );
 	return "wrong input for model: choose one of " . join(' ', keys %Gardena_BLE_Models) if (@param >= 3) && (!defined(%Gardena_BLE_Models{$param[3]}));
 	
-    my $name = $param[0];
-    my $mac  = $param[2];
+	my $name = $param[0];
+	my $mac  = $param[2];
 	my $model = $param[3];
 
-    $hash->{BTMAC}                       = $mac;
-    $hash->{INTERVAL}                    = 300;
-	$hash->{DEFAULT_ON_TIME}             = 1800;
-	$hash->{MODEL}						 = $model;
-	$hash->{NOTIFYDEV}                   = "global,$name";
-	$attr{$name}{webCmd}				 = "on:off";
-    $attr{$name}{room}					 = "GardenaBLE" if !defined($attr{$name}{room});
+	$hash->{BTMAC}						= $mac;
+	$hash->{INTERVAL}					= 300;
+	$hash->{DEFAULT_ON_TIME}			= 1800;
+	$hash->{MODEL}						= $model;
+	$hash->{NOTIFYDEV}					= "global,$name";
+	$attr{$name}{webCmd}				= "on:off";
+	$attr{$name}{room}					= "GardenaBLE" if !defined($attr{$name}{room});
 	
-    $modules{Gardena_BLE}{defptr}{ $hash->{BTMAC} } = $hash;
+	$modules{Gardena_BLE}{defptr}{ $hash->{BTMAC} } = $hash;
 	
 	readingsSingleUpdate( $hash, "state", "initialized", 0 );
 	
@@ -123,61 +123,65 @@ sub Gardena_BLE_Define($$) {
 	#Array for pending GATT jobs
 	$hash->{helper}{GT_QUEUE} = \@jobs;
 	
-    Log3 $name, 3, "Gardena_BLE ($name) - defined with BTMAC $hash->{BTMAC}";
+	Log3 $name, 3, "Gardena_BLE ($name) - defined with BTMAC $hash->{BTMAC}";
 	
-    return undef;
+	return undef;
 }
 
 sub Gardena_BLE_Undef($$) {
 
-    my ( $hash, $arg ) = @_;
+	my ( $hash, $arg ) = @_;
 
-    my $mac  = $hash->{BTMAC};
-    my $name = $hash->{NAME};
+	my $mac  = $hash->{BTMAC};
+	my $name = $hash->{NAME};
 
-    RemoveInternalTimer($hash);
-    BlockingKill( $hash->{helper}{RUNNING_PID} ) if ( defined( $hash->{helper}{RUNNING_PID} ) );
-	
+	RemoveInternalTimer($hash);
+	BlockingKill( $hash->{helper}{RUNNING_PID} ) if ( defined( $hash->{helper}{RUNNING_PID} ) );
+
 	#Todo: necessary ?
 	delete ( $hash->{helper}{GT_QUEUE} ) if ( defined( $hash->{helper}{GT_QUEUE} ) );
+
+	delete( $modules{Gardena_BLE}{defptr}{$mac} );
 	
-    delete( $modules{Gardena_BLE}{defptr}{$mac} );
-    Log3 $name, 3, "Sub Gardena_BLE_Undef ($name) - deleted device $name";
-    return undef;
+	Log3 $name, 3, "Sub Gardena_BLE_Undef ($name) - deleted device $name";
+	
+	return undef;
 }
 
 sub Gardena_BLE_Attr(@) {
 
-    my ( $cmd, $name, $attrName, $attrVal ) = @_;
-    my $hash = $defs{$name};
+	my ( $cmd, $name, $attrName, $attrVal ) = @_;
+	my $hash = $defs{$name};
 	
 	
 	Log3($name, 4,"Gardena_BLE_Attr ($name) - cmd: $cmd | attrName: $attrName | attrVal: $attrVal" );
 	
-    if ( $attrName eq "disable" ) {
-        if ( $cmd eq "set" and $attrVal eq "1" ) {
-            RemoveInternalTimer($hash);
-            readingsSingleUpdate( $hash, "state", "disabled", 1 );
-            Log3 $name, 3, "Gardena_BLE ($name) - disabled";
-        }
-        elsif ( $cmd eq "del" ) {
-            Log3 $name, 3, "Gardena_BLE ($name) - enabled";
+	if ( $attrName eq "disable" ) {
+	
+		if ( $cmd eq "set" and $attrVal eq "1" ) {
+
+			RemoveInternalTimer($hash);
+			readingsSingleUpdate( $hash, "state", "disabled", 1 );
+			Log3 $name, 3, "Gardena_BLE ($name) - disabled";
+		}
+		elsif ( $cmd eq "del" ) {
+			Log3 $name, 3, "Gardena_BLE ($name) - enabled";
 			readingsSingleUpdate( $hash, "state", "pending", 1 );
-        }
+		}
 	}
 	elsif ( $attrName eq "interval" ) {
 		
-			($hash);
-        
+		RemoveInternalTimer($hash);
+
 		if ( $cmd eq "set" ) {
-            if ( $attrVal < 30 ) {
-                Log3($name, 3, "Gardena_BLE ($name) - interval too small, please use something >= 30 (sec), default is 300 (sec)");
-                return "interval too small, please use something >= 30 (sec), default is 300 (sec)";
-            }
-            else {
-                $hash->{INTERVAL} = $attrVal;
-                Log3($name, 3,"Gardena_BLE ($name) - set interval to $attrVal");
-            }
+			if ( $attrVal < 30 ) {
+				Log3($name, 3, "Gardena_BLE ($name) - interval too small, please use something >= 30 (sec), default is 300 (sec)");
+				return "interval too small, please use something >= 30 (sec), default is 300 (sec)";
+			}
+			else {
+				$hash->{INTERVAL} = $attrVal;
+				Log3($name, 3,"Gardena_BLE ($name) - set interval to $attrVal");
+			}
 		}
 		elsif ( $cmd eq "del" ) {
 			$hash->{INTERVAL} = 300;
@@ -187,14 +191,14 @@ sub Gardena_BLE_Attr(@) {
 	elsif ( $attrName eq "default-on-time" ) {
 		
 		if ( $cmd eq "set" ) {
-            if ($attrVal > 5 && $attrVal <=28740)  {
-                $hash->{DEFAULT_ON_TIME} = $attrVal;
-                Log3($name, 3,"Gardena_BLE ($name) - set default-on-time to $attrVal");
-            }
-            else {
-                Log3($name, 3, "Gardena_BLE ($name) - default-on-time too small, please use something >= 5 (sec) and <= 28740 (sec), default is 1800 (sec)");
-                return "default-on-time too small, please use something >= 5 (sec) and <= 28740 (sec), default is 1800 (sec)";
-            }
+			if ($attrVal > 5 && $attrVal <=28740)  {
+				$hash->{DEFAULT_ON_TIME} = $attrVal;
+				Log3($name, 3,"Gardena_BLE ($name) - set default-on-time to $attrVal");
+			}
+			else {
+				Log3($name, 3, "Gardena_BLE ($name) - default-on-time too small, please use something >= 5 (sec) and <= 28740 (sec), default is 1800 (sec)");
+				return "default-on-time too small, please use something >= 5 (sec) and <= 28740 (sec), default is 1800 (sec)";
+			}
 		}
 		elsif ( $cmd eq "del" ) {
 			$hash->{DEFAULT_ON_TIME} = 1800;
@@ -206,58 +210,58 @@ sub Gardena_BLE_Attr(@) {
 
 sub Gardena_BLE_Notify($$) {
 
-    my ( $hash, $dev ) = @_;
-    my $name = $hash->{NAME};
+	my ( $hash, $dev ) = @_;
+	my $name = $hash->{NAME};
 
-    my $devname = $dev->{NAME};
-    my $devtype = $dev->{TYPE};
-    my $events  = deviceEvents( $dev, 1 );
+	my $devname = $dev->{NAME};
+	my $devtype = $dev->{TYPE};
+	my $events  = deviceEvents( $dev, 1 );
 	
 	Log3 $name, 5, "Gardena_BLE_Notify ($name) - devname: $devname | devtype: $devtype | events: @$events";
 
-    return if ( !$events );
+	return if ( !$events );
 
 	#Trigger state request
-    Gardena_BLE_stateRequestTimer($hash)
-      if (
-	  	 (
-          (
-            grep /^DEFINED.$name$/,
-            @{$events}
-            or grep /^DELETEATTR.$name.$name.disable$/,
-            @{$events}
-            or grep /^ATTR.$name.disable.0$/,
-            @{$events}
-            or grep /^DELETEATTR.$name.interval$/,
-            @{$events}
-            or grep /^DELETEATTR.$name.model$/,
-            @{$events}
-            or grep /^ATTR.$name.model.+/,
-            @{$events}
-            or grep /^ATTR.$name.interval.[0-9]+/,
-            @{$events}
-         )
-         and $devname eq 'global'
+	Gardena_BLE_stateRequestTimer($hash)
+		if (
+		(
+			(
+			grep /^DEFINED.$name$/,
+			@{$events}
+			or grep /^DELETEATTR.$name.$name.disable$/,
+			@{$events}
+			or grep /^ATTR.$name.disable.0$/,
+			@{$events}
+			or grep /^DELETEATTR.$name.interval$/,
+			@{$events}
+			or grep /^DELETEATTR.$name.model$/,
+			@{$events}
+			or grep /^ATTR.$name.model.+/,
+			@{$events}
+			or grep /^ATTR.$name.interval.[0-9]+/,
+			@{$events}
+			)
+		and $devname eq 'global'
 		)
-        or (
-            (
-                grep /^INITIALIZED$/,
-                @{$events}
-                or grep /^REREADCFG$/,
-                @{$events}
-                or grep /^MODIFIED.$name$/,
-                @{$events}
-            )
-            and $devname eq 'global'
-        )
-      );
+		or (
+		(
+			grep /^INITIALIZED$/,
+			@{$events}
+			or grep /^REREADCFG$/,
+			@{$events}
+			or grep /^MODIFIED.$name$/,
+			@{$events}
+		)
+		and $devname eq 'global'
+		)
+		);
 
-    return;
+	return;
 }
 
 sub Gardena_BLE_Set($@) {
 
-    my ( $hash, @param ) = @_;
+	my ( $hash, @param ) = @_;
 
 	my ($name, $cmd, $value)  = @param;
 	
@@ -314,84 +318,82 @@ sub Gardena_BLE_Set($@) {
 
 sub Gardena_BLE_Get($$@) {
 
-    my ( $hash, $name, @aa ) = @_;
-    my ( $cmd, @args ) = @aa;
+	my ( $hash, $name, @aa ) = @_;
+	my ( $cmd, @args ) = @aa;
 
-    my $mod = 'read';
+	my $mod = 'read';
 	my $model = $hash->{MODEL};
-    my $handle;
+	my $handle;
 	
 	Log3 $name, 5, "Gardena_BLE_Get ($name) - cmd: ".$cmd;
 	
 	return "Unknown argument $cmd, choose one of ". join(" ", keys %{$hash->{helper}{Get_CommandSet}}) if (!exists($hash->{helper}{Get_CommandSet}{$cmd}));
 	
-    if ( $cmd eq 'stateRequest' ) {
-    
-    	Gardena_BLE_stateRequest($hash);
+	if ( $cmd eq 'stateRequest' ) {
+
+		Gardena_BLE_stateRequest($hash);
 	}
-    elsif ( $cmd eq 'remainingTime' ) {
-    
-    	Gardena_BLE_getCharValue($hash,'duration');
+	elsif ( $cmd eq 'remainingTime' ) {
+
+		Gardena_BLE_getCharValue($hash,'duration');
 	}
 	#     elsif ( $cmd eq 'laststop' ) {
 	#
 	#     	getLastSprinklerTime($hash);
 	# }
-    elsif ( $cmd eq 'ctrlunitstate' ) {
-    
-    	Gardena_BLE_getCharValue($hash,'ctrlunitstate');
+	elsif ( $cmd eq 'ctrlunitstate' ) {
+
+		Gardena_BLE_getCharValue($hash,'ctrlunitstate');
 	}
-	
-    return undef;
- }
+
+	return undef;
+}
  
- sub Gardena_BLE_stateRequest($) {
+sub Gardena_BLE_stateRequest($) {
 
-     my ($hash) = @_;
-     my $name = $hash->{NAME};
-     my %readings;
-	
- 	my $model = $hash->{MODEL};
- 	my $mod = 'read';
-	
- 	Log3 $name, 5, "Gardena_BLE_stateRequest ($name)";
-	
- 	if ( !IsDisabled($name) ) {
- 		readingsSingleUpdate( $hash, "state", "requesting", 1 );
- 		Gardena_BLE_CreateParamGatttool( $hash, $mod, $Gardena_BLE_Models{$model}{state} );
-     }
-     else {
-         readingsSingleUpdate( $hash, "state", "disabled", 1 );
-     }
- }
+	my ($hash) = @_;
+	my $name = $hash->{NAME};
+	my %readings;
 
- sub Gardena_BLE_stateRequestTimer($) {
+	my $model = $hash->{MODEL};
+	my $mod = 'read';
 
-     my ($hash) = @_;
+	Log3 $name, 5, "Gardena_BLE_stateRequest ($name)";
 
-     my $name = $hash->{NAME};
-	 
-	 if ( !IsDisabled($name) ) {
-	 	
-		 RemoveInternalTimer($hash);
-		
-		 #Update relevant information
-	     Gardena_BLE_stateRequest($hash);
-	 
-		 foreach ('battery', 'timestamp', 'duration', 'ctrlunitstate') { 
-			 Gardena_BLE_getCharValue ($hash, $_); 
-		 }
-	 
-	     InternalTimer( gettimeofday() + $hash->{INTERVAL} + int( rand(10) ),
-	         "Gardena_BLE_stateRequestTimer", $hash );
-		 
-		 Log3 $name, 5, "Gardena_BLE ($name) - stateRequestTimer: Call Request Timer";
-	 }
-	 else {
-		 Log3 $name, 5, "Gardena_BLE ($name) - stateRequestTimer: No execution as device disabled.";	 	
-	 }
-	 
- }
+	if ( !IsDisabled($name) ) {
+		readingsSingleUpdate( $hash, "state", "requesting", 1 );
+		Gardena_BLE_CreateParamGatttool( $hash, $mod, $Gardena_BLE_Models{$model}{state} );
+	}
+	else {
+		readingsSingleUpdate( $hash, "state", "disabled", 1 );
+	}
+}
+
+sub Gardena_BLE_stateRequestTimer($) {
+
+	my ($hash) = @_;
+
+	my $name = $hash->{NAME};
+
+	if ( !IsDisabled($name) ) {
+
+		RemoveInternalTimer($hash);
+
+		#Update relevant information
+		Gardena_BLE_stateRequest($hash);
+
+		foreach ('battery', 'timestamp', 'duration', 'ctrlunitstate') { 
+			Gardena_BLE_getCharValue ($hash, $_); 
+		}
+
+		InternalTimer( gettimeofday() + $hash->{INTERVAL} + int( rand(10) ), "Gardena_BLE_stateRequestTimer", $hash );
+
+		Log3 $name, 5, "Gardena_BLE ($name) - stateRequestTimer: Call Request Timer";
+	}
+	else {
+		Log3 $name, 5, "Gardena_BLE ($name) - stateRequestTimer: No execution as device disabled.";
+	}
+}
 
 #Get remaining sprinkler time
 sub Gardena_BLE_getCharValue ($@) {
@@ -408,108 +410,108 @@ sub Gardena_BLE_getCharValue ($@) {
 
 sub Gardena_BLE_CreateParamGatttool($@) {
 
-    my ( $hash, $mod, $handle, $value ) = @_;
-    my $name = $hash->{NAME};
-    my $mac  = $hash->{BTMAC};
+	my ( $hash, $mod, $handle, $value ) = @_;
+	my $name = $hash->{NAME};
+	my $mac  = $hash->{BTMAC};
 	my $model = $hash->{MODEL};
 	
-    Log3 $name, 5, "Gardena_BLE ($name) - Run CreateParamGatttool with mod: $mod";
-	  
+	Log3 $name, 5, "Gardena_BLE ($name) - Run CreateParamGatttool with mod: $mod";
+
 	if($hash->{helper}{RUNNING_PID}){
-		
+	
 		my @param = ($mod, $handle, $value );
-		
-	    Log3 $name, 4, "Gardena_BLE ($name) - Run CreateParamGatttool Another job is running adding to pending: @param";
-		
+	
+		Log3 $name, 4, "Gardena_BLE ($name) - Run CreateParamGatttool Another job is running adding to pending: @param";
+	
 		push @{$hash->{helper}{GT_QUEUE}}, \@param;
 		
 		return;
 	}
 
-    if ( $mod eq 'read' ) {
+	if ( $mod eq 'read' ) {
 		
 		$hash->{helper}{RUNNING_PID} = BlockingCall(
-            "Gardena_BLE_ExecGatttool_Run",
-            $name . "|" . $mac . "|" . $mod . "|" . $handle,
-            "Gardena_BLE_ExecGatttool_Done",
-            90,
-            "Gardena_BLE_ExecGatttool_Aborted",
-            $hash
-        );
-		
-        Log3 $name, 4, "Gardena_BLE ($name) - Read Gardena_BLE_ExecGatttool_Run $name|$mac|$mod|$handle";
+			"Gardena_BLE_ExecGatttool_Run",
+			$name . "|" . $mac . "|" . $mod . "|" . $handle,
+			"Gardena_BLE_ExecGatttool_Done",
+			90,
+			"Gardena_BLE_ExecGatttool_Aborted",
+			$hash
+			);
 
-    }
-   elsif ( $mod eq 'write' ) {
-	   
-        $hash->{helper}{RUNNING_PID} = BlockingCall(
-            "Gardena_BLE_ExecGatttool_Run",
-            	$name . "|"
-              . $mac . "|"
-              . $mod . "|"
-              . $handle . "|"
-              . $value . "|",
-            "Gardena_BLE_ExecGatttool_Done",
-            90,
-            "Gardena_BLE_ExecGatttool_Aborted",
-            $hash
-        );
-		
-        Log3 $name, 4, "Gardena_BLE ($name) - Write Gardena_BLE_ExecGatttool_Run $name|$mac|$mod|$handle|$value";
-    }
+			Log3 $name, 4, "Gardena_BLE ($name) - Read Gardena_BLE_ExecGatttool_Run $name|$mac|$mod|$handle";
+
+	}
+	elsif ( $mod eq 'write' ) {
+
+		$hash->{helper}{RUNNING_PID} = BlockingCall(
+			"Gardena_BLE_ExecGatttool_Run",
+			$name . "|"
+			. $mac . "|"
+			. $mod . "|"
+			. $handle . "|"
+			. $value . "|",
+			"Gardena_BLE_ExecGatttool_Done",
+			90,
+			"Gardena_BLE_ExecGatttool_Aborted",
+			$hash
+		);
+
+		Log3 $name, 4, "Gardena_BLE ($name) - Write Gardena_BLE_ExecGatttool_Run $name|$mac|$mod|$handle|$value";
+	}
 }
 
 sub Gardena_BLE_ExecGatttool_Run($) {
 
-    my $string = shift;
+	my $string = shift;
 
-    my ( $name, $mac, $gattCmd, $handle, $value, $listen ) =
-      split( "\\|", $string );
-    my $gatttool;
-    my $json_notification;
+	my ( $name, $mac, $gattCmd, $handle, $value, $listen ) = split( "\\|", $string );
+	my $gatttool;
+	my $json_notification;
 
-    $gatttool = qx(which gatttool);
-    chomp $gatttool;
+	$gatttool = qx(which gatttool);
+	
+	chomp $gatttool;
 
-    if ( defined($gatttool) and ($gatttool) ) {
+	if ( defined($gatttool) and ($gatttool) ) {
 
-        my $cmd;
-        my $loop;
-        my @gtResult;
+		my $cmd;
+		my $loop;
+		my @gtResult;
 
-        my $hci=AttrVal( $name, "hciDevice", "hci0" );
+		my $hci=AttrVal( $name, "hciDevice", "hci0" );
 
-        $cmd .= "timeout 10 " if ($listen);
-        $cmd .= "gatttool -i $hci -b $mac ";
-        $cmd .= "--char-read -a $handle" if ( $gattCmd eq 'read' );
-        $cmd .= "--char-write-req -a $handle -n $value" if ( $gattCmd eq 'write' );
-        $cmd .= " --listen" if ($listen);
-        $cmd .= " 2>&1 /dev/null";
-		
+		$cmd .= "timeout 10 " if ($listen);
+		$cmd .= "gatttool -i $hci -b $mac ";
+		$cmd .= "--char-read -a $handle" if ( $gattCmd eq 'read' );
+		$cmd .= "--char-write-req -a $handle -n $value" if ( $gattCmd eq 'write' );
+		$cmd .= " --listen" if ($listen);
+		$cmd .= " 2>&1 /dev/null";
+
 		my $debug;
-		
-        $loop = 0;
-        do {
 
-            Log3 $name, 4, "Gardena_BLE ($name) - ExecGatttool_Run: call gatttool with command: $cmd and loop $loop";
+		$loop = 0;
+		do {
 
-	 		@gtResult = split( "\n", qx($cmd) );
+			Log3 $name, 4, "Gardena_BLE ($name) - ExecGatttool_Run: call gatttool with command: $cmd and loop $loop";
 
-            Log3 $name, 5, "Gardena_BLE ($name) - ExecGatttool_Run: gatttool loop result ".join( ",", @gtResult );
-			
+			@gtResult = split( "\n", qx($cmd) );
+
+			Log3 $name, 5, "Gardena_BLE ($name) - ExecGatttool_Run: gatttool loop result ".join( ",", @gtResult );
+
 			$debug = join( ",", @gtResult );
-            
+
 			$loop++;
-			
+
 			if(not defined($gtResult[0])){
 				$gtResult[0] = 'connect error';
 			}
 			else{
 				$gtResult[0] = 'connect error' if ($gtResult[0]=~/connect\ error:/ || $gtResult[0]=~/connect:/);
 			}
-        } while ( $loop < 5 and $gtResult[0] eq 'connect error' );
+		} while ( $loop < 5 and $gtResult[0] eq 'connect error' );
 			
-        Log3 $name, 5, "Gardena_BLE ($name) - ExecGatttool_Run: gatttool result ".join( ",", @gtResult );
+		Log3 $name, 5, "Gardena_BLE ($name) - ExecGatttool_Run: gatttool result ".join( ",", @gtResult );
 		
 		my %data_response;
 		
@@ -521,7 +523,7 @@ sub Gardena_BLE_ExecGatttool_Run($) {
 		else {			
 			foreach my $gtresult_line (@gtResult) {
 
-		        Log3 $name, 5, "Gardena_BLE ($name) - ExecGatttool_Run: gtresult_line ".$gtresult_line;
+				Log3 $name, 5, "Gardena_BLE ($name) - ExecGatttool_Run: gtresult_line ".$gtresult_line;
 				
 				if ($gtresult_line=~/^Notification\ handle\ =\ (0x[0-9a-fA-F]{1,4})\ value:\ ([0-9a-fA-F\ ]+)/){
 					
@@ -541,29 +543,26 @@ sub Gardena_BLE_ExecGatttool_Run($) {
 		}
 		
 		if ( $gtResult[0] ne 'connect error') {
-            return "$name|$mac|ok|$gattCmd|$handle|$json_notification";
-        }
-        else {
-            return "$name|$mac|error|$gattCmd|$handle|$json_notification";
-        }
-    }
-    else {
-        $json_notification = encode_json(
-'no gatttool binary found. Please check if bluez-package is properly installed'
-        );
-        return "$name|$mac|error|$gattCmd|$handle|$json_notification";
-    }
+			return "$name|$mac|ok|$gattCmd|$handle|$json_notification";
+		}
+		else {
+			return "$name|$mac|error|$gattCmd|$handle|$json_notification";
+		}
+	}
+	else {
+		$json_notification = encode_json('no gatttool binary found. Please check if bluez-package is properly installed');
+		return "$name|$mac|error|$gattCmd|$handle|$json_notification";
+	}
 }
 
 sub Gardena_BLE_ExecGatttool_Done($) {
 
-    my $string = shift;
-    my ( $name, $mac, $respstate, $gattCmd, $handle, $json_notification) =
-      split( "\\|", $string );
+	my $string = shift;
+	my ( $name, $mac, $respstate, $gattCmd, $handle, $json_notification) = split( "\\|", $string );
 
-    my $hash = $defs{$name};
+	my $hash = $defs{$name};
 
-    delete( $hash->{helper}{RUNNING_PID} );
+	delete( $hash->{helper}{RUNNING_PID} );
 	
 	if(scalar @{$hash->{helper}{GT_QUEUE}} > 0) {
 		
@@ -581,21 +580,21 @@ sub Gardena_BLE_ExecGatttool_Done($) {
 		}
 		#Unexpected
 		else {
-		    Log3 $name, 3, "Gardena_BLE ($name) - ExecGatttool_Done ERROR handling next queued command.";
+			Log3 $name, 3, "Gardena_BLE ($name) - ExecGatttool_Done ERROR handling next queued command.";
 		}
 	}
 
-    Log3 $name, 4, "Gardena_BLE ($name) - ExecGatttool_Done: Helper is disabled. Stop processing" if ( $hash->{helper}{DISABLED} );
-	
-    return if ( $hash->{helper}{DISABLED} );
+	Log3 $name, 4, "Gardena_BLE ($name) - ExecGatttool_Done: Helper is disabled. Stop processing" if ( $hash->{helper}{DISABLED} );
 
-    Log3 $name, 4, "Gardena_BLE ($name) - ExecGatttool_Done: gatttool return string: $string";
+	return if ( $hash->{helper}{DISABLED} );
 
-    my $decode_json = decode_json($json_notification);
-	
-    if ($@) {
-        Log3 $name, 3, "Gardena_BLE ($name) - ExecGatttool_Done: JSON error while request: $@";
-    }
+	Log3 $name, 4, "Gardena_BLE ($name) - ExecGatttool_Done: gatttool return string: $string";
+
+	my $decode_json = decode_json($json_notification);
+
+	if ($@) {
+		Log3 $name, 3, "Gardena_BLE ($name) - ExecGatttool_Done: JSON error while request: $@";
+	}
 
 	if ( $respstate eq 'ok') {
 		
@@ -603,70 +602,69 @@ sub Gardena_BLE_ExecGatttool_Done($) {
 			Gardena_BLE_ProcessingCharValueDesc( $hash, $gattCmd, $handle, $decode_json->{value});
 		}
 	}
-    else {
-        Gardena_BLE_ProcessingErrors( $hash, $decode_json->{msg});
+	else {
+		Gardena_BLE_ProcessingErrors( $hash, $decode_json->{msg});
 		
 		if($decode_json->{details}){
 			Log3 $name, 3, "Gardena_BLE ($name) - ExecGatttool_Done last gatt error: ".$decode_json->{details};
 		}
-    }
+	}
 }
 
 sub Gardena_BLE_ExecGatttool_Aborted($) {
 
-    my ($hash) = @_;
-    my $name = $hash->{NAME};
-    my %readings;
+	my ($hash) = @_;
+	my $name = $hash->{NAME};
+	my %readings;
 
-    delete( $hash->{helper}{RUNNING_PID} );
-	
-    readingsSingleUpdate( $hash, "state", "unreachable", 1 );
+	delete( $hash->{helper}{RUNNING_PID} );
 
-    $readings{'lastGattError'} =
-      'The BlockingCall Process terminated unexpectedly. Timedout';
-    Gardena_BLE_WriteReadings( $hash, \%readings );
+	readingsSingleUpdate( $hash, "state", "unreachable", 1 );
 
-    Log3 $name, 3, "Gardena_BLE ($name) - ExecGatttool_Aborted: The BlockingCall Process terminated unexpectedly. Timeout";
+	$readings{'lastGattError'} = 'The BlockingCall Process terminated unexpectedly. Timedout';
+	Gardena_BLE_WriteReadings( $hash, \%readings );
+
+	Log3 $name, 3, "Gardena_BLE ($name) - ExecGatttool_Aborted: The BlockingCall Process terminated unexpectedly. Timeout";
 }
 
 sub Gardena_BLE_ProcessingCharValueDesc($@) {
 
-    my ( $hash, $gattCmd, $handle, $value ) = @_;
+	my ( $hash, $gattCmd, $handle, $value ) = @_;
 
-    my $name = $hash->{NAME};
+	my $name = $hash->{NAME};
 	my $model = $hash->{MODEL};
-    my $readings;
+	my $readings;
 
-    Log3 $name, 4, "Gardena_BLE ($name) - ProcessingCharValueDesc: handle: $handle | value: $value";
-	
-    if ( $model eq 'watercontrol' ) {
+	Log3 $name, 4, "Gardena_BLE ($name) - ProcessingCharValueDesc: handle: $handle | value: $value";
+
+	if ( $model eq 'watercontrol' ) {
 		if ( $handle eq $Gardena_BLE_Models{$model}{timestamp}) {
-            $readings = Gardena_BLE_WaterControlHandleTimestamp($hash, $value);
-        }
-        elsif ( $handle eq $Gardena_BLE_Models{$model}{battery}) {
-            $readings = Gardena_BLE_WaterControlHandleBattery($hash, $value);
-        }
-        elsif ( $handle eq $Gardena_BLE_Models{$model}{state}) {
-            $readings = Gardena_BLE_WaterControlHandleState($hash, $value);
-        }
-        elsif ( $handle eq $Gardena_BLE_Models{$model}{duration} ) {
-            $readings = Gardena_BLE_WaterControlHandleDuration($hash, $value);
-        }
-        elsif ( $handle eq $Gardena_BLE_Models{$model}{ctrlunitstate} ) {
-            $readings = Gardena_BLE_WaterControlHandleCtrlUnitState($hash, $value);
-        }
-    }
-    Gardena_BLE_WriteReadings( $hash, $readings );
+		$readings = Gardena_BLE_WaterControlHandleTimestamp($hash, $value);
+		}
+		elsif ( $handle eq $Gardena_BLE_Models{$model}{battery}) {
+			$readings = Gardena_BLE_WaterControlHandleBattery($hash, $value);
+		}
+		elsif ( $handle eq $Gardena_BLE_Models{$model}{state}) {
+			$readings = Gardena_BLE_WaterControlHandleState($hash, $value);
+		}
+		elsif ( $handle eq $Gardena_BLE_Models{$model}{duration} ) {
+			$readings = Gardena_BLE_WaterControlHandleDuration($hash, $value);
+		}
+		elsif ( $handle eq $Gardena_BLE_Models{$model}{ctrlunitstate} ) {
+			$readings = Gardena_BLE_WaterControlHandleCtrlUnitState($hash, $value);
+		}
+	}
+	Gardena_BLE_WriteReadings( $hash, $readings );
 }
 
 sub Gardena_BLE_WaterControlHandleTimestamp($$) {
 	
-    my ( $hash, $notification ) = @_;
+	my ( $hash, $notification ) = @_;
 
-    my $name = $hash->{NAME};
-    my %readings;
+	my $name = $hash->{NAME};
+	my %readings;
 
-    Log3 $name, 4, "Gardena_BLE ($name) - WaterControlHandleTimestamp";
+	Log3 $name, 4, "Gardena_BLE ($name) - WaterControlHandleTimestamp";
 	
 	$notification =~ s/[^a-fA-F0-9]//g;
 	
@@ -683,12 +681,12 @@ sub Gardena_BLE_WaterControlHandleTimestamp($$) {
 
 sub Gardena_BLE_WaterControlHandleBattery($$) {
 
-    my ( $hash, $notification ) = @_;
+	my ( $hash, $notification ) = @_;
 
-    my $name = $hash->{NAME};
-    my %readings;
+	my $name = $hash->{NAME};
+	my %readings;
 
-    Log3 $name, 4, "Gardena_BLE ($name) - WaterControlHandleBattery";
+	Log3 $name, 4, "Gardena_BLE ($name) - WaterControlHandleBattery";
 	
 	$notification =~ s/[^a-fA-F0-9]//g;
 	
@@ -708,12 +706,12 @@ sub Gardena_BLE_WaterControlHandleBattery($$) {
 
 sub Gardena_BLE_WaterControlHandleState($$) {
 
-    my ( $hash, $notification ) = @_;
+	my ( $hash, $notification ) = @_;
 
-    my $name = $hash->{NAME};
-    my %readings;
+	my $name = $hash->{NAME};
+	my %readings;
 
-    Log3 $name, 4, "Gardena_BLE ($name) - WaterControlHandleState";
+	Log3 $name, 4, "Gardena_BLE ($name) - WaterControlHandleState";
 	
 	$notification =~ s/[^a-fA-F0-9]//g;
 
@@ -730,12 +728,12 @@ sub Gardena_BLE_WaterControlHandleState($$) {
 
 sub Gardena_BLE_WaterControlHandleDuration($$) {
 
-    my ( $hash, $notification ) = @_;
+	my ( $hash, $notification ) = @_;
 
-    my $name = $hash->{NAME};
-    my %readings;
+	my $name = $hash->{NAME};
+	my %readings;
 
-    Log3 $name, 4, "Gardena_BLE ($name) - WaterControlHandleDuration";
+	Log3 $name, 4, "Gardena_BLE ($name) - WaterControlHandleDuration";
 	
 	$notification =~ s/[^a-fA-F0-9]//g;
 	$notification =~ s/0000$//;
@@ -752,12 +750,12 @@ sub Gardena_BLE_WaterControlHandleDuration($$) {
 
 sub Gardena_BLE_WaterControlHandleCtrlUnitState($$) {
 
-    my ( $hash, $notification ) = @_;
+	my ( $hash, $notification ) = @_;
 
-    my $name = $hash->{NAME};
-    my %readings;
+	my $name = $hash->{NAME};
+	my %readings;
 
-    Log3 $name, 4, "Gardena_BLE ($name) - WaterControlHandleCtrlUnitState";
+	Log3 $name, 4, "Gardena_BLE ($name) - WaterControlHandleCtrlUnitState";
 	
 	$notification =~ s/[^a-fA-F0-9]//g;
 	
@@ -774,34 +772,34 @@ sub Gardena_BLE_WaterControlHandleCtrlUnitState($$) {
 
 sub Gardena_BLE_WriteReadings($$) {
 
-    my ( $hash, $readings ) = @_;
+	my ( $hash, $readings ) = @_;
 
-    my $name = $hash->{NAME};
+	my $name = $hash->{NAME};
 
-    readingsBeginUpdate($hash);
-    while ( my ( $r, $v ) = each %{$readings} ) {
-        readingsBulkUpdate( $hash, $r, $v );
-    }
-	
+	readingsBeginUpdate($hash);
+	while ( my ( $r, $v ) = each %{$readings} ) {
+	    readingsBulkUpdate( $hash, $r, $v );
+	}
+
 	if ($readings->{'lastGattError'}) {
 		readingsBulkUpdateIfChanged( $hash, "state", 'error');
 	}
 	
-    readingsEndUpdate( $hash, 1 );
+	readingsEndUpdate( $hash, 1 );
 }
 
 sub Gardena_BLE_ProcessingErrors($$) {
 
-    my ( $hash, $notification ) = @_;
+	my ( $hash, $notification ) = @_;
 
-    my $name = $hash->{NAME};
-    my %readings;
+	my $name = $hash->{NAME};
+	my %readings;
 
-    Log3 $name, 5, "Gardena_BLE ($name) - ProcessingErrors";
-	
-    $readings{'lastGattError'} = $notification;
+	Log3 $name, 5, "Gardena_BLE ($name) - ProcessingErrors";
 
-    Gardena_BLE_WriteReadings( $hash, \%readings );
+	$readings{'lastGattError'} = $notification;
+
+	Gardena_BLE_WriteReadings( $hash, \%readings );
 }
 
 1;
