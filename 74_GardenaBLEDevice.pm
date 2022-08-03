@@ -1,6 +1,6 @@
 ###############################################################################
 #
-#  (c) 2021 Copyright: ambiman
+#  (c) 2022 Copyright: ambiman
 #  All rights reserved
 #
 #  This script is free software; you can redistribute it and/or modify
@@ -18,7 +18,7 @@
 #  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 #  GNU General Public License for more details.
 #
-#
+#  Version: 0.2
 ###############################################################################
 
 package main;
@@ -28,39 +28,37 @@ use warnings;
 use POSIX;
 import JSON::XS;
 
-my %Gardena_BLE_Models = (
+my $version = '0.2';
+
+my %GardenaBLEDevice_Models = (
 	watercontrol => {
-		'whandle'		=> '0x0071',
-		'timestamp'		=> '0x0031',
-		'battery'		=> '0x0029', ##Most likely the battery - or it's 0x002f
-		'state'			=> '0x006b',
-		'duration'		=> '0x0071',
-		#'laststop'	 	=> '0x003a', ##TODO: History sprinkler data ?
-		'ctrlunitstate'	=> '0x006e'
+		'timestamp'							=> '98bd0b13-0b0e-421a-84e5-ddbf75dc6de4',
+		'battery'							=> '98bd2a19-0b0e-421a-84e5-ddbf75dc6de4',
+		'state'								=> '98bd0f11-0b0e-421a-84e5-ddbf75dc6de4',
+		'one-time-watering-duration'		=> '98bd0f13-0b0e-421a-84e5-ddbf75dc6de4',
+		'one-time-default-watering-time'	=> '98bd0f14-0b0e-421a-84e5-ddbf75dc6de4',
+		'ctrlunitstate'						=> '98bd0f12-0b0e-421a-84e5-ddbf75dc6de4',
+		'firmware_revision'					=> '00002a26-0000-1000-8000-00805f9b34fb' 	#Firmware Revision String
 	}
 );
 
-my %Gardena_BLE_Set_Opts = (
+my %GardenaBLEDevice_Set_Opts = (
 	all => {
 		'on' => undef
-		# 'battery'	=> undef,
-		# 'time'		=> undef
 	},
 	watercontrol => {
 		'on-for-timer'	=> undef,
-		'off'			=> undef
+		'off'			=> undef,
+		'default-watering-time' => undef
 	}
 );
 
-my %Gardena_BLE_Get_Opts = (
+my %GardenaBLEDevice_Get_Opts = (
 	all => {
-		#'time'	=> undef,
-		#'batterylevel'	=> undef,
 		'stateRequest'	=> undef
 	},
 	watercontrol => {
 		'remainingTime'	=> undef,
-		#'laststop'		=> undef,
 		'ctrlunitstate' => undef
 	}
 );
@@ -68,54 +66,56 @@ my %Gardena_BLE_Get_Opts = (
 sub GardenaBLEDevice_Initialize($) {
     my ($hash) = @_;
 
-	$hash->{SetFn}    = "Gardena_BLE_Set";
-	$hash->{GetFn}    = "Gardena_BLE_Get";
-	$hash->{DefFn}    = "Gardena_BLE_Define";
-	$hash->{NotifyFn} = "Gardena_BLE_Notify";
-	$hash->{UndefFn}  = "Gardena_BLE_Undef";
-	$hash->{AttrFn}   = "Gardena_BLE_Attr";
+	$hash->{SetFn}    = "GardenaBLEDevice_Set";
+	$hash->{GetFn}    = "GardenaBLEDevice_Get";
+	$hash->{DefFn}    = "GardenaBLEDevice_Define";
+	$hash->{NotifyFn} = "GardenaBLEDevice_Notify";
+	$hash->{UndefFn}  = "GardenaBLEDevice_Undef";
+	$hash->{AttrFn}   = "GardenaBLEDevice_Attr";
 	$hash->{AttrList} =
 		"disable:1 "
 		. "interval "
-		. "default-on-time "
+		. "default-on-time-fhem "
 		. "hciDevice:hci0,hci1,hci2 "
 		. "blockingCallLoglevel:2,3,4,5 "
 		. $readingFnAttributes;
 }
 
 # declare prototype
-sub Gardena_BLE_ExecGatttool_Run($);
+sub GardenaBLEDevice_ExecGatttool_Run($);
 
-sub Gardena_BLE_Define($$) {
+sub GardenaBLEDevice_Define($$) {
 
 	my ( $hash, $def ) = @_;
 	my @param = split('[ \t]+', $def );
 
-	return "too few parameters: define <name> Gardena_BLE <BTMAC> <MODEL>" if ( @param != 4 );
-	return "wrong input for model: choose one of " . join(' ', keys %Gardena_BLE_Models) if (@param >= 3) && (!defined(%Gardena_BLE_Models{$param[3]}));
+	return "too few parameters: define <name> GardenaBLEDevice <BTMAC> <MODEL>" if ( @param != 4 );
+	return "wrong input for model: choose one of " . join(' ', keys %GardenaBLEDevice_Models) if (@param >= 3) && (!defined(%GardenaBLEDevice_Models{$param[3]}));
 	
 	my $name = $param[0];
 	my $mac  = $param[2];
 	my $model = $param[3];
-
+	
+	$hash->{MODULE_VERSION}				= $version;
 	$hash->{BTMAC}						= $mac;
 	$hash->{INTERVAL}					= 300;
-	$hash->{DEFAULT_ON_TIME}			= 1800;
+	$hash->{DEFAULT_ON_TIME_FHEM}		= 1800;
+	$hash->{GATTCOUNT}					= 0;
 	$hash->{MODEL}						= $model;
 	$hash->{NOTIFYDEV}					= "global,$name";
 	$attr{$name}{webCmd}				= "on:off";
 	$attr{$name}{room}					= "GardenaBLE" if !defined($attr{$name}{room});
 	
-	$modules{Gardena_BLE}{defptr}{ $hash->{BTMAC} } = $hash;
+	$modules{GardenaBLEDevice}{defptr}{ $hash->{BTMAC} } = $hash;
 	
 	readingsSingleUpdate( $hash, "state", "initialized", 0 );
 	
 	# Set commands supported by every Gardena BLE device + model specific ones
-	my %set_commands = (%{%Gardena_BLE_Set_Opts{all}}, %{%Gardena_BLE_Set_Opts{$model}});
+	my %set_commands = (%{%GardenaBLEDevice_Set_Opts{all}}, %{%GardenaBLEDevice_Set_Opts{$model}});
 	$hash->{helper}->{Set_CommandSet} = \%set_commands;
 	
 	# Get commands supported by every Gardena BLE device + model specific ones
-	my %get_commands = (%{%Gardena_BLE_Get_Opts{all}}, %{%Gardena_BLE_Get_Opts{$model}});
+	my %get_commands = (%{%GardenaBLEDevice_Get_Opts{all}}, %{%GardenaBLEDevice_Get_Opts{$model}});
 	$hash->{helper}->{Get_CommandSet} = \%get_commands;
 	
 	my @jobs = ();
@@ -123,12 +123,12 @@ sub Gardena_BLE_Define($$) {
 	#Array for pending GATT jobs
 	$hash->{helper}{GT_QUEUE} = \@jobs;
 	
-	Log3 $name, 3, "Gardena_BLE ($name) - defined with BTMAC $hash->{BTMAC}";
+	Log3 $name, 3, "GardenaBLEDevice ($name) - defined with BTMAC $hash->{BTMAC}";
 	
 	return undef;
 }
 
-sub Gardena_BLE_Undef($$) {
+sub GardenaBLEDevice_Undef($$) {
 
 	my ( $hash, $arg ) = @_;
 
@@ -141,20 +141,20 @@ sub Gardena_BLE_Undef($$) {
 	#Todo: necessary ?
 	delete ( $hash->{helper}{GT_QUEUE} ) if ( defined( $hash->{helper}{GT_QUEUE} ) );
 
-	delete( $modules{Gardena_BLE}{defptr}{$mac} );
+	delete( $modules{GardenaBLEDevice}{defptr}{$mac} );
 	
-	Log3 $name, 3, "Sub Gardena_BLE_Undef ($name) - deleted device $name";
+	Log3 $name, 3, "Sub GardenaBLEDevice_Undef ($name) - deleted device $name";
 	
 	return undef;
 }
 
-sub Gardena_BLE_Attr(@) {
+sub GardenaBLEDevice_Attr(@) {
 
 	my ( $cmd, $name, $attrName, $attrVal ) = @_;
 	my $hash = $defs{$name};
 	
 	
-	Log3($name, 4,"Gardena_BLE_Attr ($name) - cmd: $cmd | attrName: $attrName | attrVal: $attrVal" );
+	Log3($name, 4,"GardenaBLEDevice_Attr ($name) - cmd: $cmd | attrName: $attrName | attrVal: $attrVal" );
 	
 	if ( $attrName eq "disable" ) {
 	
@@ -162,10 +162,10 @@ sub Gardena_BLE_Attr(@) {
 
 			RemoveInternalTimer($hash);
 			readingsSingleUpdate( $hash, "state", "disabled", 1 );
-			Log3 $name, 3, "Gardena_BLE ($name) - disabled";
+			Log3 $name, 3, "GardenaBLEDevice ($name) - disabled";
 		}
 		elsif ( $cmd eq "del" ) {
-			Log3 $name, 3, "Gardena_BLE ($name) - enabled";
+			Log3 $name, 3, "GardenaBLEDevice ($name) - enabled";
 			readingsSingleUpdate( $hash, "state", "pending", 1 );
 		}
 	}
@@ -175,40 +175,40 @@ sub Gardena_BLE_Attr(@) {
 
 		if ( $cmd eq "set" ) {
 			if ( $attrVal < 30 ) {
-				Log3($name, 3, "Gardena_BLE ($name) - interval too small, please use something >= 30 (sec), default is 300 (sec)");
+				Log3($name, 3, "GardenaBLEDevice ($name) - interval too small, please use something >= 30 (sec), default is 300 (sec)");
 				return "interval too small, please use something >= 30 (sec), default is 300 (sec)";
 			}
 			else {
 				$hash->{INTERVAL} = $attrVal;
-				Log3($name, 3,"Gardena_BLE ($name) - set interval to $attrVal");
+				Log3($name, 3,"GardenaBLEDevice ($name) - set interval to $attrVal");
 			}
 		}
 		elsif ( $cmd eq "del" ) {
 			$hash->{INTERVAL} = 300;
-			Log3($name, 3,"Gardena_BLE ($name) - set interval to default value 300 (sec)");
+			Log3($name, 3,"GardenaBLEDevice ($name) - set interval to default value 300 (sec)");
 		}
 	}
-	elsif ( $attrName eq "default-on-time" ) {
+	elsif ( $attrName eq "default-on-time-fhem" ) {
 		
 		if ( $cmd eq "set" ) {
-			if ($attrVal > 5 && $attrVal <=28740)  {
-				$hash->{DEFAULT_ON_TIME} = $attrVal;
-				Log3($name, 3,"Gardena_BLE ($name) - set default-on-time to $attrVal");
+			if ($attrVal > 5 && $attrVal <=65535)  {
+				$hash->{DEFAULT_ON_TIME_FHEM} = $attrVal;
+				Log3($name, 3,"GardenaBLEDevice ($name) - set default-on-time-fhem to $attrVal");
 			}
 			else {
-				Log3($name, 3, "Gardena_BLE ($name) - default-on-time too small, please use something >= 5 (sec) and <= 28740 (sec), default is 1800 (sec)");
-				return "default-on-time too small, please use something >= 5 (sec) and <= 28740 (sec), default is 1800 (sec)";
+				Log3($name, 3, "GardenaBLEDevice ($name) - default-on-time-fhem too small, please use something >= 5 (sec) and <= 65535 (sec), default is 1800 (sec)");
+				return "default-on-time-fhem too small, please use something >= 5 (sec) and <= 65535 (sec), default is 1800 (sec)";
 			}
 		}
 		elsif ( $cmd eq "del" ) {
-			$hash->{DEFAULT_ON_TIME} = 1800;
-			Log3($name, 3,"Gardena_BLE ($name) - set default-on-time to default value 1800 (sec)");
+			$hash->{DEFAULT_ON_TIME_FHEM} = 1800;
+			Log3($name, 3,"GardenaBLEDevice ($name) - set default-on-time-fhem to default value 1800 (sec)");
 		}
 	}
 	return undef;
 }
 
-sub Gardena_BLE_Notify($$) {
+sub GardenaBLEDevice_Notify($$) {
 
 	my ( $hash, $dev ) = @_;
 	my $name = $hash->{NAME};
@@ -217,12 +217,12 @@ sub Gardena_BLE_Notify($$) {
 	my $devtype = $dev->{TYPE};
 	my $events  = deviceEvents( $dev, 1 );
 	
-	Log3 $name, 5, "Gardena_BLE_Notify ($name) - devname: $devname | devtype: $devtype | events: @$events";
+	Log3 $name, 5, "GardenaBLEDevice_Notify ($name) - devname: $devname | devtype: $devtype | events: @$events";
 
 	return if ( !$events );
 
 	#Trigger state request
-	Gardena_BLE_stateRequestTimer($hash)
+	GardenaBLEDevice_stateRequestTimer($hash)
 		if (
 		(
 			(
@@ -259,7 +259,7 @@ sub Gardena_BLE_Notify($$) {
 	return;
 }
 
-sub Gardena_BLE_Set($@) {
+sub GardenaBLEDevice_Set($@) {
 
 	my ( $hash, @param ) = @_;
 
@@ -280,35 +280,96 @@ sub Gardena_BLE_Set($@) {
 			$supported_cmd=1;
 		}
 	}
-
-	return "Unknown argument $cmd, choose one of " . join(" ", keys %{$hash->{helper}{Set_CommandSet}}) if ($supported_cmd==0);
-
-	if (lc $cmd eq 'on') {
-		readingsSingleUpdate( $hash, "state", "set_on", 1 );
 	
-		Gardena_BLE_CreateParamGatttool( $hash, $mod, $Gardena_BLE_Models{$model}{whandle}, sprintf(uc(unpack("H*",pack("v*",$hash->{DEFAULT_ON_TIME})))."0000") );
-		Gardena_BLE_stateRequest($hash);
-		Gardena_BLE_getCharValue($hash,'duration');
+	return "Unknown argument $cmd, choose one of " . join(" ", keys %{$hash->{helper}{Set_CommandSet}}) if ($supported_cmd==0);
+		
+	if (lc $cmd eq 'on') {
+		
+		if ($hash->{helper}{$model}{onetimewaterhandle}) {
+
+			readingsSingleUpdate( $hash, "state", "set_on", 1 );
+	
+			GardenaBLEDevice_CreateParamGatttool( $hash, $mod, $hash->{helper}{$model}{onetimewaterhandle}, sprintf(uc(unpack("H*",pack("v*",$hash->{DEFAULT_ON_TIME_FHEM})))."0000") );
+			GardenaBLEDevice_stateRequest($hash);
+			GardenaBLEDevice_getCharValue($hash, 'one-time-watering-duration');
+		}
+		else {
+		
+			Log3 $name, 2, "GardenaBLEDevice ($name) - GardenaBLEDevice_Set cmd_on: onetimewaterhandle char value handle does not exist.";
+			
+			GardenaBLEDevice_ProcessingErrors($hash, "onetimewaterhandle char value handle does not exist");
+			
+			return "Error: onetimewaterhandle char value handle does not exist."
+		}
 	}
 	elsif(lc $cmd eq 'off') {
-		readingsSingleUpdate( $hash, "state", "set_off", 1 );	
+		
+		if ($hash->{helper}{$model}{onetimewaterhandle}) {
+			
+			readingsSingleUpdate( $hash, "state", "set_off", 1 );	
 		 
-		Gardena_BLE_CreateParamGatttool( $hash, $mod, $Gardena_BLE_Models{$model}{whandle}, sprintf(uc(unpack("H*",pack("v*",0)))."0000") );
-		Gardena_BLE_stateRequest($hash);
+			GardenaBLEDevice_CreateParamGatttool( $hash, $mod, $hash->{helper}{$model}{onetimewaterhandle}, sprintf(uc(unpack("H*",pack("v*",0)))."0000") );
+			GardenaBLEDevice_stateRequest($hash);
+			GardenaBLEDevice_getCharValue($hash, 'one-time-watering-duration');
+		}
+		else {
+		
+			Log3 $name, 2, "GardenaBLEDevice ($name) - GardenaBLEDevice_Set cmd_off: onetimewaterhandle char value handle does not exist.";
+			
+			GardenaBLEDevice_ProcessingErrors($hash, "onetimewaterhandle char value handle does not exist");
+			
+			return "Error: onetimewaterhandle char value handle does not exist."
+		}
 	}
 	elsif(lc $cmd eq 'on-for-timer') {
 		
-		if ($value > 5 && $value <=28740) {
+		if ($hash->{helper}{$model}{onetimewaterhandle}) {
 		
-			readingsSingleUpdate( $hash, "state", "set_on-for-timer ".$value, 1 );
+			if ($value > 5 && $value <=65535) {
+		
+				readingsSingleUpdate( $hash, "state", "set_on-for-timer ".$value, 1 );
 
-			Gardena_BLE_CreateParamGatttool( $hash, $mod, $Gardena_BLE_Models{$model}{whandle}, sprintf(uc(unpack("H*",pack("v*",$value)))."0000") );
-			Gardena_BLE_stateRequest($hash);
-			Gardena_BLE_getCharValue($hash,'duration');
+				GardenaBLEDevice_CreateParamGatttool( $hash, $mod, $hash->{helper}{$model}{onetimewaterhandle}, sprintf(uc(unpack("H*",pack("v*",$value)))."0000") );
+				GardenaBLEDevice_stateRequest($hash);
+				GardenaBLEDevice_getCharValue($hash, 'one-time-watering-duration');
+			}
+			else {
+				return "Use set <device> on-for-timer [range 5-65535]";
+			}
 		}
 		else {
-			return "Use set <device> on-for-timer [range 5-28740]";
-		}	
+		
+			Log3 $name, 2, "GardenaBLEDevice ($name) - GardenaBLEDevice_Set cmd_on-for-timer: onetimewaterhandle char value handle does not exist.";
+			
+			GardenaBLEDevice_ProcessingErrors($hash, "onetimewaterhandle char value handle does not exist");
+			
+			return "Error: onetimewaterhandle char value handle does not exist."
+		}
+	}
+	elsif(lc $cmd eq 'default-watering-time') {
+		
+		if ($hash->{helper}{$model}{onetimewaterdeftimehandle}) {
+		
+			if ($value > 5 && $value <=65535) {
+		
+				readingsSingleUpdate( $hash, "state", "set_default-watering-time ".$value, 1 );
+
+				GardenaBLEDevice_CreateParamGatttool( $hash, $mod, $hash->{helper}{$model}{onetimewaterdeftimehandle}, sprintf(uc(unpack("H*",pack("v*",$value)))."0000") );
+				GardenaBLEDevice_stateRequest($hash);
+				GardenaBLEDevice_getCharValue($hash,'one-time-default-watering-time');
+			}
+			else {
+				return "Use set <device> on-for-timer [range 5-65535]";
+			}
+		}
+		else {
+		
+			Log3 $name, 2, "GardenaBLEDevice ($name) - GardenaBLEDevice_Set cmd_on-for-timer: onetimewaterhandle char value handle does not exist.";
+			
+			GardenaBLEDevice_ProcessingErrors($hash, "onetimewaterhandle char value handle does not exist");
+			
+			return "Error: onetimewaterhandle char value handle does not exist."
+		}
 	}
 	else{
 		return 0;
@@ -316,40 +377,36 @@ sub Gardena_BLE_Set($@) {
 
 }
 
-sub Gardena_BLE_Get($$@) {
+sub GardenaBLEDevice_Get($$@) {
 
 	my ( $hash, $name, @aa ) = @_;
 	my ( $cmd, @args ) = @aa;
 
 	my $mod = 'read';
 	my $model = $hash->{MODEL};
-	my $handle;
+	my $uuid;
 	
-	Log3 $name, 5, "Gardena_BLE_Get ($name) - cmd: ".$cmd;
+	Log3 $name, 5, "GardenaBLEDevice_Get ($name) - cmd: ".$cmd;
 	
 	return "Unknown argument $cmd, choose one of ". join(" ", keys %{$hash->{helper}{Get_CommandSet}}) if (!exists($hash->{helper}{Get_CommandSet}{$cmd}));
 	
 	if ( $cmd eq 'stateRequest' ) {
 
-		Gardena_BLE_stateRequest($hash);
+		GardenaBLEDevice_stateRequest($hash);
 	}
 	elsif ( $cmd eq 'remainingTime' ) {
 
-		Gardena_BLE_getCharValue($hash,'duration');
+		GardenaBLEDevice_getCharValue($hash,'one-time-watering-duration');
 	}
-	#     elsif ( $cmd eq 'laststop' ) {
-	#
-	#     	getLastSprinklerTime($hash);
-	# }
 	elsif ( $cmd eq 'ctrlunitstate' ) {
 
-		Gardena_BLE_getCharValue($hash,'ctrlunitstate');
+		GardenaBLEDevice_getCharValue($hash,'ctrlunitstate');
 	}
 
 	return undef;
 }
  
-sub Gardena_BLE_stateRequest($) {
+sub GardenaBLEDevice_stateRequest($) {
 
 	my ($hash) = @_;
 	my $name = $hash->{NAME};
@@ -358,18 +415,18 @@ sub Gardena_BLE_stateRequest($) {
 	my $model = $hash->{MODEL};
 	my $mod = 'read';
 
-	Log3 $name, 5, "Gardena_BLE_stateRequest ($name)";
+	Log3 $name, 5, "GardenaBLEDevice_stateRequest ($name)";
 
 	if ( !IsDisabled($name) ) {
 		readingsSingleUpdate( $hash, "state", "requesting", 1 );
-		Gardena_BLE_CreateParamGatttool( $hash, $mod, $Gardena_BLE_Models{$model}{state} );
+		GardenaBLEDevice_CreateParamGatttool( $hash, $mod, $GardenaBLEDevice_Models{$model}{'state'} );
 	}
 	else {
 		readingsSingleUpdate( $hash, "state", "disabled", 1 );
 	}
 }
 
-sub Gardena_BLE_stateRequestTimer($) {
+sub GardenaBLEDevice_stateRequestTimer($) {
 
 	my ($hash) = @_;
 
@@ -380,48 +437,57 @@ sub Gardena_BLE_stateRequestTimer($) {
 		RemoveInternalTimer($hash);
 
 		#Update relevant information
-		Gardena_BLE_stateRequest($hash);
+		GardenaBLEDevice_stateRequest($hash);
 
-		foreach ('battery', 'timestamp', 'duration', 'ctrlunitstate') { 
-			Gardena_BLE_getCharValue ($hash, $_); 
+		foreach ('firmware_revision', 'battery', 'timestamp', 'ctrlunitstate', 'one-time-watering-duration', 'one-time-default-watering-time') { 
+			GardenaBLEDevice_getCharValue ($hash, $_); 
 		}
 
-		InternalTimer( gettimeofday() + $hash->{INTERVAL} + int( rand(10) ), "Gardena_BLE_stateRequestTimer", $hash );
+		InternalTimer( gettimeofday() + $hash->{INTERVAL} + int( rand(10) ), "GardenaBLEDevice_stateRequestTimer", $hash );
 
-		Log3 $name, 5, "Gardena_BLE ($name) - stateRequestTimer: Call Request Timer";
+		Log3 $name, 5, "GardenaBLEDevice ($name) - stateRequestTimer: Call Request Timer";
 	}
 	else {
-		Log3 $name, 5, "Gardena_BLE ($name) - stateRequestTimer: No execution as device disabled.";
+		Log3 $name, 5, "GardenaBLEDevice ($name) - stateRequestTimer: No execution as device disabled.";
 	}
 }
 
-#Get remaining sprinkler time
-sub Gardena_BLE_getCharValue ($@) {
+#Get characteristics value
+sub GardenaBLEDevice_getCharValue ($@) {
 	
-	my ( $hash, $handle ) = @_;
+	my ( $hash, $uuid ) = @_;
 	my $mod = 'read';
 	my $model = $hash->{MODEL};
 	my $name = $hash->{NAME};
 	
-	Log3 $name, 5, "Gardena_BLE ($name) - getCharValue: ".$handle;
+	Log3 $name, 5, "GardenaBLEDevice ($name) - getCharValue: ".$uuid;
 	
-	Gardena_BLE_CreateParamGatttool( $hash, $mod, $Gardena_BLE_Models{$model}{$handle});
+	GardenaBLEDevice_CreateParamGatttool( $hash, $mod, $GardenaBLEDevice_Models{$model}{$uuid});
 }
 
-sub Gardena_BLE_CreateParamGatttool($@) {
+sub GardenaBLEDevice_CreateParamGatttool($@) {
 
-	my ( $hash, $mod, $handle, $value ) = @_;
+	my ( $hash, $mod, $uuid, $value ) = @_;
 	my $name = $hash->{NAME};
 	my $mac  = $hash->{BTMAC};
 	my $model = $hash->{MODEL};
 	
-	Log3 $name, 5, "Gardena_BLE ($name) - Run CreateParamGatttool with mod: $mod";
+	$value = "" if($mod eq 'read');
+	
+	Log3 $name, 5, "GardenaBLEDevice ($name) - Run CreateParamGatttool with mod: $mod";
 
 	if($hash->{helper}{RUNNING_PID}){
-	
-		my @param = ($mod, $handle, $value );
-	
-		Log3 $name, 4, "Gardena_BLE ($name) - Run CreateParamGatttool Another job is running adding to pending: @param";
+		
+		my @param;
+		
+		if ($mod eq 'read') {
+			@param = ($mod, $uuid);
+		}
+		elsif ($mod eq 'write') {
+			@param = ($mod, $uuid, $value);
+		}
+		
+		Log3 $name, 4, "GardenaBLEDevice ($name) - Run CreateParamGatttool Another job is running adding to pending: @param";
 	
 		push @{$hash->{helper}{GT_QUEUE}}, \@param;
 		
@@ -430,44 +496,45 @@ sub Gardena_BLE_CreateParamGatttool($@) {
 
 	if ( $mod eq 'read' ) {
 		
+		Log3 $name, 4, "GardenaBLEDevice ($name) - Read GardenaBLEDevice_ExecGatttool_Run $name|$mac|$mod|$uuid";
+		
 		$hash->{helper}{RUNNING_PID} = BlockingCall(
-			"Gardena_BLE_ExecGatttool_Run",
-			$name . "|" . $mac . "|" . $mod . "|" . $handle,
-			"Gardena_BLE_ExecGatttool_Done",
+			"GardenaBLEDevice_ExecGatttool_Run",
+			$name . "|" . $mac . "|" . $mod . "|" . $uuid,
+			"GardenaBLEDevice_ExecGatttool_Done",
 			90,
-			"Gardena_BLE_ExecGatttool_Aborted",
+			"GardenaBLEDevice_ExecGatttool_Aborted",
 			$hash
 			);
-
-			Log3 $name, 4, "Gardena_BLE ($name) - Read Gardena_BLE_ExecGatttool_Run $name|$mac|$mod|$handle";
-
 	}
 	elsif ( $mod eq 'write' ) {
-
+		
+		my $handle = $uuid;
+		
+		Log3 $name, 4, "GardenaBLEDevice ($name) - Write GardenaBLEDevice_ExecGatttool_Run $name|$mac|$mod|$uuid|$handle|$value";
+		
 		$hash->{helper}{RUNNING_PID} = BlockingCall(
-			"Gardena_BLE_ExecGatttool_Run",
+			"GardenaBLEDevice_ExecGatttool_Run",
 			$name . "|"
 			. $mac . "|"
 			. $mod . "|"
 			. $handle . "|"
 			. $value . "|",
-			"Gardena_BLE_ExecGatttool_Done",
+			"GardenaBLEDevice_ExecGatttool_Done",
 			90,
-			"Gardena_BLE_ExecGatttool_Aborted",
+			"GardenaBLEDevice_ExecGatttool_Aborted",
 			$hash
 		);
-
-		Log3 $name, 4, "Gardena_BLE ($name) - Write Gardena_BLE_ExecGatttool_Run $name|$mac|$mod|$handle|$value";
 	}
 }
 
-sub Gardena_BLE_ExecGatttool_Run($) {
+sub GardenaBLEDevice_ExecGatttool_Run($) {
 
 	my $string = shift;
 
-	my ( $name, $mac, $gattCmd, $handle, $value, $listen ) = split( "\\|", $string );
+	my ( $name, $mac, $gattCmd, $uuid, $value, $listen ) = split( "\\|", $string );
 	my $gatttool;
-	my $json_notification;
+	my $json_response;
 
 	$gatttool = qx(which gatttool);
 	
@@ -483,8 +550,8 @@ sub Gardena_BLE_ExecGatttool_Run($) {
 
 		$cmd .= "timeout 10 " if ($listen);
 		$cmd .= "gatttool -i $hci -b $mac ";
-		$cmd .= "--char-read -a $handle" if ( $gattCmd eq 'read' );
-		$cmd .= "--char-write-req -a $handle -n $value" if ( $gattCmd eq 'write' );
+		$cmd .= "--char-read -u $uuid" if ( $gattCmd eq 'read' );
+		$cmd .= "--char-write-req -a $uuid -n $value" if ( $gattCmd eq 'write' );
 		$cmd .= " --listen" if ($listen);
 		$cmd .= " 2>&1 /dev/null";
 
@@ -492,12 +559,12 @@ sub Gardena_BLE_ExecGatttool_Run($) {
 
 		$loop = 0;
 		do {
-
-			Log3 $name, 4, "Gardena_BLE ($name) - ExecGatttool_Run: call gatttool with command: $cmd and loop $loop";
+			
+			Log3 $name, 4, "GardenaBLEDevice ($name) - ExecGatttool_Run: call gatttool with command: $cmd and loop $loop";
 
 			@gtResult = split( "\n", qx($cmd) );
 
-			Log3 $name, 5, "Gardena_BLE ($name) - ExecGatttool_Run: gatttool loop result ".join( ",", @gtResult );
+			Log3 $name, 5, "GardenaBLEDevice ($name) - ExecGatttool_Run: gatttool loop result ".join( ",", @gtResult );
 
 			$debug = join( ",", @gtResult );
 
@@ -511,54 +578,49 @@ sub Gardena_BLE_ExecGatttool_Run($) {
 			}
 		} while ( $loop < 5 and $gtResult[0] eq 'connect error' );
 			
-		Log3 $name, 5, "Gardena_BLE ($name) - ExecGatttool_Run: gatttool result ".join( ",", @gtResult );
+		Log3 $name, 5, "GardenaBLEDevice ($name) - ExecGatttool_Run: gatttool result ".join( ",", @gtResult );
 		
 		my %data_response;
 		
 		if ($gtResult[0] eq 'connect error') {
 			
-			$json_notification = encode_json( {'msg' => 'connect error', 'details' => $debug} );
+			$json_response = encode_json( {'msg' => 'connect error', 'details' => $debug} );
 			
 		}
 		else {			
 			foreach my $gtresult_line (@gtResult) {
 
-				Log3 $name, 5, "Gardena_BLE ($name) - ExecGatttool_Run: gtresult_line ".$gtresult_line;
+				Log3 $name, 5, "GardenaBLEDevice ($name) - ExecGatttool_Run: gtresult_line ".$gtresult_line;
 				
-				if ($gtresult_line=~/^Notification\ handle\ =\ (0x[0-9a-fA-F]{1,4})\ value:\ ([0-9a-fA-F\ ]+)/){
-					
-					$data_response{'msg'} = "Notification";
+				if($gtresult_line=~/^handle:\ (0x[0-9a-fA-F]{4})[\ \t]+value:\ ([0-9a-fA-F\ ]+)/){
+					$data_response{'msg'} = "char_read_uuid_response";
 					$data_response{'handle'} = $1 if ($1);
 					$data_response{'value'} = $2 if ($2);
-				}
-				elsif($gtresult_line=~/^Characteristic\ value\/descriptor:\ ([0-9a-fA-F\ ]+)/){
-					$data_response{'msg'} = "Char_Value_Desc";
-					$data_response{'value'} = $1;
 				}
 				else {
 					$data_response{'msg'} = $gtresult_line;
 				}
 			}
-			$json_notification = encode_json( \%data_response );
+			$json_response = encode_json( \%data_response );
 		}
 		
 		if ( $gtResult[0] ne 'connect error') {
-			return "$name|$mac|ok|$gattCmd|$handle|$json_notification";
+			return "$name|$mac|ok|$gattCmd|$uuid|$json_response";
 		}
 		else {
-			return "$name|$mac|error|$gattCmd|$handle|$json_notification";
+			return "$name|$mac|error|$gattCmd|$uuid|$json_response";
 		}
 	}
 	else {
-		$json_notification = encode_json('no gatttool binary found. Please check if bluez-package is properly installed');
-		return "$name|$mac|error|$gattCmd|$handle|$json_notification";
+		$json_response = encode_json('no gatttool binary found. Please check if bluez-package is properly installed');
+		return "$name|$mac|error|$gattCmd|$uuid|$json_response";
 	}
 }
 
-sub Gardena_BLE_ExecGatttool_Done($) {
+sub GardenaBLEDevice_ExecGatttool_Done($) {
 
 	my $string = shift;
-	my ( $name, $mac, $respstate, $gattCmd, $handle, $json_notification) = split( "\\|", $string );
+	my ( $name, $mac, $respstate, $gattCmd, $uuid, $json_response) = split( "\\|", $string );
 
 	my $hash = $defs{$name};
 
@@ -572,46 +634,48 @@ sub Gardena_BLE_ExecGatttool_Done($) {
 		
 		#Typically write command
 		if(scalar @$param == 3) {
-			Gardena_BLE_CreateParamGatttool( $hash, @$param[0], @$param[1], @$param[2] );	
+			GardenaBLEDevice_CreateParamGatttool( $hash, @$param[0], @$param[1], @$param[2] );	
 		}
 		#Typically read command
 		elsif(scalar @$param == 2) {
-			Gardena_BLE_CreateParamGatttool( $hash, @$param[0], @$param[1] );	
+			GardenaBLEDevice_CreateParamGatttool( $hash, @$param[0], @$param[1] );	
 		}
 		#Unexpected
 		else {
-			Log3 $name, 3, "Gardena_BLE ($name) - ExecGatttool_Done ERROR handling next queued command.";
+			Log3 $name, 3, "GardenaBLEDevice ($name) - ExecGatttool_Done ERROR handling next queued command.";
 		}
 	}
 
-	Log3 $name, 4, "Gardena_BLE ($name) - ExecGatttool_Done: Helper is disabled. Stop processing" if ( $hash->{helper}{DISABLED} );
+	Log3 $name, 4, "GardenaBLEDevice ($name) - ExecGatttool_Done: Helper is disabled. Stop processing" if ( $hash->{helper}{DISABLED} );
 
 	return if ( $hash->{helper}{DISABLED} );
 
-	Log3 $name, 4, "Gardena_BLE ($name) - ExecGatttool_Done: gatttool return string: $string";
+	Log3 $name, 4, "GardenaBLEDevice ($name) - ExecGatttool_Done: gatttool return string: $string";
 
-	my $decode_json = decode_json($json_notification);
+	my $decode_json = decode_json($json_response);
 
 	if ($@) {
-		Log3 $name, 3, "Gardena_BLE ($name) - ExecGatttool_Done: JSON error while request: $@";
+		Log3 $name, 3, "GardenaBLEDevice ($name) - ExecGatttool_Done: JSON error while request: $@";
 	}
 
 	if ( $respstate eq 'ok') {
 		
-		if($decode_json->{msg} eq 'Char_Value_Desc'){
-			Gardena_BLE_ProcessingCharValueDesc( $hash, $gattCmd, $handle, $decode_json->{value});
+		$hash->{GATTCOUNT}++;
+		
+		if($decode_json->{msg} eq 'char_read_uuid_response'){
+			GardenaBLEDevice_ProcessingCharUUIDResponse( $hash, $gattCmd, $uuid, $decode_json->{handle}, $decode_json->{value});
 		}
 	}
 	else {
-		Gardena_BLE_ProcessingErrors( $hash, $decode_json->{msg});
+		GardenaBLEDevice_ProcessingErrors( $hash, $decode_json->{msg});
 		
 		if($decode_json->{details}){
-			Log3 $name, 3, "Gardena_BLE ($name) - ExecGatttool_Done last gatt error: ".$decode_json->{details};
+			Log3 $name, 3, "GardenaBLEDevice ($name) - ExecGatttool_Done last gatt error: ".$decode_json->{details};
 		}
 	}
 }
 
-sub Gardena_BLE_ExecGatttool_Aborted($) {
+sub GardenaBLEDevice_ExecGatttool_Aborted($) {
 
 	my ($hash) = @_;
 	my $name = $hash->{NAME};
@@ -622,75 +686,116 @@ sub Gardena_BLE_ExecGatttool_Aborted($) {
 	readingsSingleUpdate( $hash, "state", "unreachable", 1 );
 
 	$readings{'lastGattError'} = 'The BlockingCall Process terminated unexpectedly. Timedout';
-	Gardena_BLE_WriteReadings( $hash, \%readings );
+	GardenaBLEDevice_WriteReadings( $hash, \%readings );
 
-	Log3 $name, 3, "Gardena_BLE ($name) - ExecGatttool_Aborted: The BlockingCall Process terminated unexpectedly. Timeout";
+	Log3 $name, 3, "GardenaBLEDevice ($name) - ExecGatttool_Aborted: The BlockingCall Process terminated unexpectedly. Timeout";
 }
 
-sub Gardena_BLE_ProcessingCharValueDesc($@) {
+sub GardenaBLEDevice_ProcessingCharUUIDResponse($@) {
 
-	my ( $hash, $gattCmd, $handle, $value ) = @_;
+	my ( $hash, $gattCmd, $uuid, $handle, $value ) = @_;
 
 	my $name = $hash->{NAME};
 	my $model = $hash->{MODEL};
 	my $readings;
 
-	Log3 $name, 4, "Gardena_BLE ($name) - ProcessingCharValueDesc: handle: $handle | value: $value";
-
-	if ( $model eq 'watercontrol' ) {
-		if ( $handle eq $Gardena_BLE_Models{$model}{timestamp}) {
-		$readings = Gardena_BLE_WaterControlHandleTimestamp($hash, $value);
-		}
-		elsif ( $handle eq $Gardena_BLE_Models{$model}{battery}) {
-			$readings = Gardena_BLE_WaterControlHandleBattery($hash, $value);
-		}
-		elsif ( $handle eq $Gardena_BLE_Models{$model}{state}) {
-			$readings = Gardena_BLE_WaterControlHandleState($hash, $value);
-		}
-		elsif ( $handle eq $Gardena_BLE_Models{$model}{duration} ) {
-			$readings = Gardena_BLE_WaterControlHandleDuration($hash, $value);
-		}
-		elsif ( $handle eq $Gardena_BLE_Models{$model}{ctrlunitstate} ) {
-			$readings = Gardena_BLE_WaterControlHandleCtrlUnitState($hash, $value);
-		}
+	Log3 $name, 4, "GardenaBLEDevice ($name) - GardenaBLEDevice_ProcessingCharUUIDResponse: uuid: $uuid | handle: $handle | value: $value";
+	
+	if ( $uuid eq $GardenaBLEDevice_Models{$model}{'firmware_revision'} ) {
+		$readings = GardenaBLEDevice_HandleFirmware($hash, $value);
 	}
-	Gardena_BLE_WriteReadings( $hash, $readings );
+	elsif ( $uuid eq $GardenaBLEDevice_Models{$model}{'timestamp'}) {
+		$readings = GardenaBLEDevice_WaterControlHandleTimestamp($hash, $value);
+	}
+	elsif ( $uuid eq $GardenaBLEDevice_Models{$model}{'battery'}) {
+		$readings = GardenaBLEDevice_WaterControlHandleBattery($hash, $value);
+	}
+	elsif ( $uuid eq $GardenaBLEDevice_Models{$model}{'state'}) {
+		$readings = GardenaBLEDevice_WaterControlHandleState($hash, $value);
+	}
+	elsif ( $uuid eq $GardenaBLEDevice_Models{$model}{'ctrlunitstate'} ) {
+		$readings = GardenaBLEDevice_WaterControlHandleCtrlUnitState($hash, $value);
+	}
+	elsif ( $uuid eq $GardenaBLEDevice_Models{$model}{'one-time-watering-duration'} ) {
+		
+		if (!$hash->{helper}{$model}{onetimewaterhandle}){
+			
+			Log3 $name, 4, "GardenaBLEDevice ($name) - GardenaBLEDevice_ProcessingCharUUIDResponse: Setting one-time-watering-duration char value handle to: $handle";
+			
+			$hash->{helper}{$model}{onetimewaterhandle} = $handle;
+		}
+		
+		$readings = GardenaBLEDevice_WaterControlHandleDuration($hash, $value);
+	}
+	elsif ( $uuid eq $GardenaBLEDevice_Models{$model}{'one-time-default-watering-time'} ) {
+		
+		if (!$hash->{helper}{$model}{onetimewaterdeftimehandle}){
+			
+			Log3 $name, 4, "GardenaBLEDevice ($name) - GardenaBLEDevice_ProcessingCharUUIDResponse: Setting one-time-default-watering-time char value handle to: $handle";
+			
+			$hash->{helper}{$model}{onetimewaterdeftimehandle} = $handle;
+		}
+		
+		$readings = GardenaBLEDevice_WaterControlHandleDefaultWateringTime($hash, $value);
+	}
+
+	GardenaBLEDevice_WriteReadings( $hash, $readings );
 }
 
-sub Gardena_BLE_WaterControlHandleTimestamp($$) {
+#Read firwmare via UUID 0x2a26 (Firmware Revision String)
+sub GardenaBLEDevice_HandleFirmware($$) {
+
+	my ( $hash, $value ) = @_;
+
+	my $name = $hash->{NAME};
+	my %readings;
 	
-	my ( $hash, $notification ) = @_;
+	Log3 $name, 4, "GardenaBLEDevice ($name) - HandleFirmware";
+	
+	$value =~ s/[^a-fA-F0-9]//g;
+	$value =~ s/([a-fA-F0-9]{2})/chr(hex($1))/eg;
+	
+	Log3 $name, 4, "GardenaBLEDevice ($name) - HandleFirmware: firmware: $value";
+	
+	$readings{'firmware'} = $value;
+	
+	return \%readings;
+}
+
+sub GardenaBLEDevice_WaterControlHandleTimestamp($$) {
+	
+	my ( $hash, $value ) = @_;
 
 	my $name = $hash->{NAME};
 	my %readings;
 
-	Log3 $name, 4, "Gardena_BLE ($name) - WaterControlHandleTimestamp";
+	Log3 $name, 4, "GardenaBLEDevice ($name) - WaterControlHandleTimestamp";
 	
-	$notification =~ s/[^a-fA-F0-9]//g;
+	$value =~ s/[^a-fA-F0-9]//g;
 	
 	#Big to little endian
-	$notification =~ /(..)(..)(..)(..)/;
-	my $notification_le = $4.$3.$2.$1;
+	$value =~ /(..)(..)(..)(..)/;
+	my $value_le = $4.$3.$2.$1;
 	
-	my $timestamp = hex("0x".$notification_le);
+	my $timestamp = hex("0x".$value_le);
 	
 	$readings{'deviceTime'} = scalar(gmtime($timestamp));
 	
 	return \%readings;
 }
 
-sub Gardena_BLE_WaterControlHandleBattery($$) {
+sub GardenaBLEDevice_WaterControlHandleBattery($$) {
 
-	my ( $hash, $notification ) = @_;
+	my ( $hash, $value ) = @_;
 
 	my $name = $hash->{NAME};
 	my %readings;
 
-	Log3 $name, 4, "Gardena_BLE ($name) - WaterControlHandleBattery";
+	Log3 $name, 4, "GardenaBLEDevice ($name) - WaterControlHandleBattery";
 	
-	$notification =~ s/[^a-fA-F0-9]//g;
+	$value =~ s/[^a-fA-F0-9]//g;
 	
-	my $batterylevel = hex("0x".$notification);
+	my $batterylevel = hex("0x".$value);
 	
 	$readings{'batteryLevel'} = $batterylevel."%";
 	
@@ -704,18 +809,18 @@ sub Gardena_BLE_WaterControlHandleBattery($$) {
 	return \%readings;
 }
 
-sub Gardena_BLE_WaterControlHandleState($$) {
+sub GardenaBLEDevice_WaterControlHandleState($$) {
 
-	my ( $hash, $notification ) = @_;
+	my ( $hash, $value ) = @_;
 
 	my $name = $hash->{NAME};
 	my %readings;
 
-	Log3 $name, 4, "Gardena_BLE ($name) - WaterControlHandleState";
+	Log3 $name, 4, "GardenaBLEDevice ($name) - WaterControlHandleState";
 	
-	$notification =~ s/[^a-fA-F0-9]//g;
+	$value =~ s/[^a-fA-F0-9]//g;
 
-	if ($notification eq "01"){
+	if ($value eq "01"){
 		
 		$readings{'state'} = "on";
 	}
@@ -726,40 +831,60 @@ sub Gardena_BLE_WaterControlHandleState($$) {
 	return \%readings;
 }
 
-sub Gardena_BLE_WaterControlHandleDuration($$) {
+sub GardenaBLEDevice_WaterControlHandleDuration($$) {
 
-	my ( $hash, $notification ) = @_;
+	my ( $hash, $value ) = @_;
 
 	my $name = $hash->{NAME};
 	my %readings;
 
-	Log3 $name, 4, "Gardena_BLE ($name) - WaterControlHandleDuration";
+	Log3 $name, 4, "GardenaBLEDevice ($name) - WaterControlHandleDuration";
 	
-	$notification =~ s/[^a-fA-F0-9]//g;
-	$notification =~ s/0000$//;
+	$value =~ s/[^a-fA-F0-9]//g;
+#	$value =~ s/0000$//;
 	
 	#Big to little endian
-	$notification =~ /(..)(..)/;
-	my $notifcaiton_le = $2.$1;
+	$value =~ /(..)(..)(..)(..)/;
+	my $value_le = $4.$3.$2.$1;
 	
-	$readings{'remainingTime'} = hex("0x".$notifcaiton_le)." seconds";
+	$readings{'remainingTime'} = hex("0x".$value_le)." seconds";
 	
 	return \%readings;
 }
 
+sub GardenaBLEDevice_WaterControlHandleDefaultWateringTime($$) {
 
-sub Gardena_BLE_WaterControlHandleCtrlUnitState($$) {
-
-	my ( $hash, $notification ) = @_;
+	my ( $hash, $value ) = @_;
 
 	my $name = $hash->{NAME};
 	my %readings;
 
-	Log3 $name, 4, "Gardena_BLE ($name) - WaterControlHandleCtrlUnitState";
+	Log3 $name, 4, "GardenaBLEDevice ($name) - WaterControlHandleDefaultWateringTime";
 	
-	$notification =~ s/[^a-fA-F0-9]//g;
+	$value =~ s/[^a-fA-F0-9]//g;
+#	$value =~ s/0000$//;
 	
-	if ($notification eq "01"){
+	#Big to little endian
+	$value =~ /(..)(..)(..)(..)/;
+	my $value_le = $4.$3.$2.$1;
+	
+	$readings{'default-one-time-watering-time'} = hex("0x".$value_le)." seconds";
+	
+	return \%readings;
+}
+
+sub GardenaBLEDevice_WaterControlHandleCtrlUnitState($$) {
+
+	my ( $hash, $value ) = @_;
+
+	my $name = $hash->{NAME};
+	my %readings;
+
+	Log3 $name, 4, "GardenaBLEDevice ($name) - WaterControlHandleCtrlUnitState";
+	
+	$value =~ s/[^a-fA-F0-9]//g;
+	
+	if ($value eq "01"){
 		
 		$readings{'ctrlunitstate'} = "installed";
 	}
@@ -770,7 +895,7 @@ sub Gardena_BLE_WaterControlHandleCtrlUnitState($$) {
 	return \%readings;
 }
 
-sub Gardena_BLE_WriteReadings($$) {
+sub GardenaBLEDevice_WriteReadings($$) {
 
 	my ( $hash, $readings ) = @_;
 
@@ -788,18 +913,18 @@ sub Gardena_BLE_WriteReadings($$) {
 	readingsEndUpdate( $hash, 1 );
 }
 
-sub Gardena_BLE_ProcessingErrors($$) {
+sub GardenaBLEDevice_ProcessingErrors($$) {
 
-	my ( $hash, $notification ) = @_;
+	my ( $hash, $value ) = @_;
 
 	my $name = $hash->{NAME};
 	my %readings;
 
-	Log3 $name, 5, "Gardena_BLE ($name) - ProcessingErrors";
+	Log3 $name, 5, "GardenaBLEDevice ($name) - ProcessingErrors";
 
-	$readings{'lastGattError'} = $notification;
+	$readings{'lastGattError'} = $value;
 
-	Gardena_BLE_WriteReadings( $hash, \%readings );
+	GardenaBLEDevice_WriteReadings( $hash, \%readings );
 }
 
 1;
