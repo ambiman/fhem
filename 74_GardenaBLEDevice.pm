@@ -26,7 +26,7 @@ package main;
 use strict;
 use warnings;
 use POSIX;
-import JSON::XS;
+use JSON::XS;
 
 my $version = '0.2';
 
