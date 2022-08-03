@@ -410,16 +410,12 @@ sub GardenaBLEDevice_stateRequest($) {
 
 	my ($hash) = @_;
 	my $name = $hash->{NAME};
-	my %readings;
-
-	my $model = $hash->{MODEL};
-	my $mod = 'read';
 
 	Log3 $name, 5, "GardenaBLEDevice_stateRequest ($name)";
 
 	if ( !IsDisabled($name) ) {
 		readingsSingleUpdate( $hash, "state", "requesting", 1 );
-		GardenaBLEDevice_CreateParamGatttool( $hash, $mod, $GardenaBLEDevice_Models{$model}{'state'} );
+		GardenaBLEDevice_getCharValue ($hash, 'state'); 
 	}
 	else {
 		readingsSingleUpdate( $hash, "state", "disabled", 1 );
