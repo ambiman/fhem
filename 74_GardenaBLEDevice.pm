@@ -359,16 +359,16 @@ sub GardenaBLEDevice_Set($@) {
 				GardenaBLEDevice_getCharValue($hash,'one-time-default-watering-time');
 			}
 			else {
-				return "Use set <device> on-for-timer [range 5-65535]";
+				return "Use set <device> default-watering-time [range 5-65535]";
 			}
 		}
 		else {
 		
-			Log3 $name, 2, "GardenaBLEDevice ($name) - GardenaBLEDevice_Set cmd_on-for-timer: onetimewaterhandle char value handle does not exist.";
+			Log3 $name, 2, "GardenaBLEDevice ($name) - GardenaBLEDevice_Set cmd_on-for-timer: onetimewaterdeftimehandle char value handle does not exist.";
 			
-			GardenaBLEDevice_ProcessingErrors($hash, "onetimewaterhandle char value handle does not exist");
+			GardenaBLEDevice_ProcessingErrors($hash, "onetimewaterdeftimehandle char value handle does not exist");
 			
-			return "Error: onetimewaterhandle char value handle does not exist."
+			return "Error: onetimewaterdeftimehandle char value handle does not exist."
 		}
 	}
 	else{
