@@ -364,7 +364,7 @@ sub GardenaBLEDevice_Set($@) {
 		}
 		else {
 		
-			Log3 $name, 2, "GardenaBLEDevice ($name) - GardenaBLEDevice_Set cmd_on-for-timer: onetimewaterdeftimehandle char value handle does not exist.";
+			Log3 $name, 2, "GardenaBLEDevice ($name) - GardenaBLEDevice_Set cmd_default-watering-time: onetimewaterdeftimehandle char value handle does not exist.";
 			
 			GardenaBLEDevice_ProcessingErrors($hash, "onetimewaterdeftimehandle char value handle does not exist");
 			
