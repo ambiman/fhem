@@ -18,7 +18,7 @@
 #  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 #  GNU General Public License for more details.
 #
-#  Version: 0.2
+#  Version: 0.3
 ###############################################################################
 
 package main;
@@ -27,8 +27,9 @@ use strict;
 use warnings;
 use POSIX;
 use JSON::XS;
+use DateTime;
 
-my $version = '0.2';
+my $version = '0.3';
 
 my %GardenaBLEDevice_Models = (
 	watercontrol => {
@@ -38,19 +39,37 @@ my %GardenaBLEDevice_Models = (
 		'one-time-watering-duration'		=> '98bd0f13-0b0e-421a-84e5-ddbf75dc6de4',
 		'one-time-default-watering-time'	=> '98bd0f14-0b0e-421a-84e5-ddbf75dc6de4',
 		'ctrlunitstate'						=> '98bd0f12-0b0e-421a-84e5-ddbf75dc6de4',
-		'firmware_revision'					=> '00002a26-0000-1000-8000-00805f9b34fb' 	#Firmware Revision String
+		'firmware_revision'					=> '00002a26-0000-1000-8000-00805f9b34fb', 	#Firmware Revision String
+		'schedule1-wdays'					=> '98bd0c13-0b0e-421a-84e5-ddbf75dc6de4',
+		'schedule1-starttime'				=> '98bd0c11-0b0e-421a-84e5-ddbf75dc6de4',
+		'schedule1-duration'				=> '98bd0c12-0b0e-421a-84e5-ddbf75dc6de4',
+		'schedule2-wdays'					=> '98bd0c23-0b0e-421a-84e5-ddbf75dc6de4',
+		'schedule2-starttime'				=> '98bd0c21-0b0e-421a-84e5-ddbf75dc6de4',
+		'schedule2-duration'				=> '98bd0c22-0b0e-421a-84e5-ddbf75dc6de4',
+		'schedule3-wdays'					=> '98bd0c33-0b0e-421a-84e5-ddbf75dc6de4',
+		'schedule3-starttime'				=> '98bd0c31-0b0e-421a-84e5-ddbf75dc6de4',
+		'schedule3-duration'				=> '98bd0c32-0b0e-421a-84e5-ddbf75dc6de4'
 	}
 );
 
 my %GardenaBLEDevice_Set_Opts = (
 	all => {
-		'on' => undef
+		'on' => undef,
+		'resetGattCount' => undef
 	},
 	watercontrol => {
 		'on-for-timer'	=> undef,
-		'off'			=> undef,
-		'default-watering-time' => undef
-	}
+		'off'	=> undef,
+		'default-watering-time'	=> undef,
+		'synchronizeClock'	=> undef,
+		'setSchedule1'	=> undef,
+		'setSchedule2'	=> undef,
+		'setSchedule3'	=> undef,
+		'deleteSchedule1'	=> undef,
+		'deleteSchedule2'	=> undef,
+		'deleteSchedule3'	=> undef,
+		'deleteAllSchedules'	=> undef
+	}	
 );
 
 my %GardenaBLEDevice_Get_Opts = (
@@ -59,7 +78,7 @@ my %GardenaBLEDevice_Get_Opts = (
 	},
 	watercontrol => {
 		'remainingTime'	=> undef,
-		'ctrlunitstate' => undef
+		'ctrlunitstate'	=> undef
 	}
 );
 
@@ -76,6 +95,10 @@ sub GardenaBLEDevice_Initialize($) {
 		"disable:1 "
 		. "interval "
 		. "default-on-time-fhem "
+		. "btSecurityLevel:low,medium "
+		. "sleepBetweenGATTCmds:1,2,3,4,5 "
+		. "GATTtimeout "
+		. "maxErrorCount "
 		. "hciDevice:hci0,hci1,hci2 "
 		. "blockingCallLoglevel:2,3,4,5 "
 		. $readingFnAttributes;
@@ -95,14 +118,21 @@ sub GardenaBLEDevice_Define($$) {
 	my $name = $param[0];
 	my $mac  = $param[2];
 	my $model = $param[3];
-	
+
 	$hash->{MODULE_VERSION}				= $version;
 	$hash->{BTMAC}						= $mac;
 	$hash->{INTERVAL}					= 300;
 	$hash->{DEFAULT_ON_TIME_FHEM}		= 1800;
+	$hash->{SLEEP_BETWEEN_GATT_CMDS}	= 1;
+	$hash->{BTSECLEVEL}					= "medium";
 	$hash->{GATTCOUNT}					= 0;
+	$hash->{GATTTIMEOUT}				= 20;
+	$hash->{MAXGATTQUEUE}				= 80;
+	$hash->{MAXERRORCOUNT}				= 30;
+	$hash->{ERRORCOUNT}					= 0;
 	$hash->{MODEL}						= $model;
 	$hash->{NOTIFYDEV}					= "global,$name";
+	
 	$attr{$name}{webCmd}				= "on:off";
 	$attr{$name}{room}					= "GardenaBLE" if !defined($attr{$name}{room});
 	
@@ -153,16 +183,13 @@ sub GardenaBLEDevice_Attr(@) {
 	my ( $cmd, $name, $attrName, $attrVal ) = @_;
 	my $hash = $defs{$name};
 	
-	
 	Log3($name, 4,"GardenaBLEDevice_Attr ($name) - cmd: $cmd | attrName: $attrName | attrVal: $attrVal" );
 	
 	if ( $attrName eq "disable" ) {
 	
 		if ( $cmd eq "set" and $attrVal eq "1" ) {
-
-			RemoveInternalTimer($hash);
-			readingsSingleUpdate( $hash, "state", "disabled", 1 );
-			Log3 $name, 3, "GardenaBLEDevice ($name) - disabled";
+			
+			GardenaBLEDevice_Disable($hash);
 		}
 		elsif ( $cmd eq "del" ) {
 			Log3 $name, 3, "GardenaBLEDevice ($name) - enabled";
@@ -191,18 +218,90 @@ sub GardenaBLEDevice_Attr(@) {
 	elsif ( $attrName eq "default-on-time-fhem" ) {
 		
 		if ( $cmd eq "set" ) {
-			if ($attrVal > 5 && $attrVal <=65535)  {
+			if ($attrVal >= 60 && $attrVal <= 28740)  {
 				$hash->{DEFAULT_ON_TIME_FHEM} = $attrVal;
 				Log3($name, 3,"GardenaBLEDevice ($name) - set default-on-time-fhem to $attrVal");
 			}
 			else {
-				Log3($name, 3, "GardenaBLEDevice ($name) - default-on-time-fhem too small, please use something >= 5 (sec) and <= 65535 (sec), default is 1800 (sec)");
-				return "default-on-time-fhem too small, please use something >= 5 (sec) and <= 65535 (sec), default is 1800 (sec)";
+				Log3($name, 3, "GardenaBLEDevice ($name) - default-on-time-fhem invalid, please use something >= 60 (sec) and <= 28740 (sec), default is 1800 (sec)");
+				return "default-on-time-fhem invalid, please use something >= 60 (sec) and <= 28740 (sec), default is 1800 (sec)";
 			}
 		}
 		elsif ( $cmd eq "del" ) {
 			$hash->{DEFAULT_ON_TIME_FHEM} = 1800;
 			Log3($name, 3,"GardenaBLEDevice ($name) - set default-on-time-fhem to default value 1800 (sec)");
+		}
+	}
+	elsif ( $attrName eq "btSecurityLevel" ) {
+		
+		if ( $cmd eq "set" ) {
+			
+			if ($attrVal eq 'low' || $attrVal eq 'medium' ) {
+				$hash->{BTSECLEVEL} = $attrVal;
+				Log3($name, 3,"GardenaBLEDevice ($name) - set btSecurityLevel to $attrVal");
+			}
+			else {
+				Log3($name, 3, "GardenaBLEDevice ($name) - btSecurityLevel invalid, please use either low or medium.");
+				return "btSecurityLevel invalid, please use either low or medium.)";
+			}
+		}
+		elsif ( $cmd eq "del" ) {
+			$hash->{BTSECLEVEL} = "medium";
+			Log3($name, 3,"GardenaBLEDevice ($name) - set btSecurityLevel to default value medium.");
+		}
+	}
+	elsif ( $attrName eq "sleepBetweenGATTCmds" ) {
+		
+		if ( $cmd eq "set" ) {
+			
+			if ($attrVal > 0 && $attrVal <= 5 ) {
+				$hash->{SLEEP_BETWEEN_GATT_CMDS} = $attrVal;
+				Log3($name, 3,"GardenaBLEDevice ($name) - set sleepBetweenGATTCmds to $attrVal");
+			}
+			else {
+				Log3($name, 3, "GardenaBLEDevice ($name) - sleepBetweenGATTCmds invalid, please within the range 1-5 (sec)");
+				return "sleepBetweenGATTCmds invalid, please within the range 1-5 (sec).";
+			}
+		}
+		elsif ( $cmd eq "del" ) {
+			$hash->{SLEEP_BETWEEN_GATT_CMDS} = 1;
+			Log3($name, 3,"GardenaBLEDevice ($name) - set sleepBetweenGATTCmds to default value 1 second.");
+		}
+	}
+	elsif ( $attrName eq "maxErrorCount" ) {
+		
+		if ( $cmd eq "set" ) {
+			
+			if ($attrVal >= 5 && $attrVal <= 200 ) {
+				$hash->{MAXERRORCOUNT} = $attrVal;
+				Log3($name, 3,"GardenaBLEDevice ($name) - set maxErrorCount to $attrVal");
+			}
+			else {
+				Log3($name, 3, "GardenaBLEDevice ($name) - maxErrorCount invalid, please choose within the range of 5-200 attempts");
+				return "maxErrorCount invalid, please choose within the range 5-200 attempts.";
+			}
+		}
+		elsif ( $cmd eq "del" ) {
+			$hash->{MAXERRORCOUNT} = 30;
+			Log3($name, 3,"GardenaBLEDevice ($name) - set maxErrorCount to default value of 30 attempts.");
+		}
+	}
+	elsif ( $attrName eq "GATTtimeout" ) {
+		
+		if ( $cmd eq "set" ) {
+			
+			if ($attrVal >= 10 && $attrVal <= 60 ) {
+				$hash->{GATTTIMEOUT} = $attrVal;
+				Log3($name, 3,"GardenaBLEDevice ($name) - set GATTtimeout to $attrVal");
+			}
+			else {
+				Log3($name, 3, "GardenaBLEDevice ($name) - GATTtimeout invalid, please choose within the range of 10-60 seconds.");
+				return "GATTtimeout invalid, please choose within the range 10-60 seconds.";
+			}
+		}
+		elsif ( $cmd eq "del" ) {
+			$hash->{GATTTIMEOUT} = 20;
+			Log3($name, 3,"GATTtimeout ($name) - set maxErrorCount to default value of 20 seconds.");
 		}
 	}
 	return undef;
@@ -228,7 +327,7 @@ sub GardenaBLEDevice_Notify($$) {
 			(
 			grep /^DEFINED.$name$/,
 			@{$events}
-			or grep /^DELETEATTR.$name.$name.disable$/,
+			or grep /^DELETEATTR.$name.disable$/,
 			@{$events}
 			or grep /^ATTR.$name.disable.0$/,
 			@{$events}
@@ -263,12 +362,13 @@ sub GardenaBLEDevice_Set($@) {
 
 	my ( $hash, @param ) = @_;
 
-	my ($name, $cmd, $value)  = @param;
+	my ($name, $cmd, @args)  = @param;
 	
 	my $mod = 'write';
 	my $model = $hash->{MODEL};
 	
 	my $supported_cmd=0;
+	my $errorParseCmd=0;
 	
 	return 0 if ( IsDisabled($name) );
 	
@@ -276,7 +376,7 @@ sub GardenaBLEDevice_Set($@) {
 		
 		$command=~s/:.*//;
 		
-		if(lc $command eq $cmd){
+		if(lc $command eq lc $cmd){
 			$supported_cmd=1;
 		}
 	}
@@ -289,7 +389,7 @@ sub GardenaBLEDevice_Set($@) {
 
 			readingsSingleUpdate( $hash, "state", "set_on", 1 );
 	
-			GardenaBLEDevice_CreateParamGatttool( $hash, $mod, $hash->{helper}{$model}{onetimewaterhandle}, sprintf(uc(unpack("H*",pack("v*",$hash->{DEFAULT_ON_TIME_FHEM})))."0000") );
+			GardenaBLEDevice_CreateParamGatttool( $hash, $mod, $hash->{helper}{$model}{onetimewaterhandle}, sprintf(uc(unpack("H*",pack("V*",$hash->{DEFAULT_ON_TIME_FHEM})))) );
 			GardenaBLEDevice_stateRequest($hash);
 			GardenaBLEDevice_getCharValue($hash, 'one-time-watering-duration');
 		}
@@ -299,7 +399,7 @@ sub GardenaBLEDevice_Set($@) {
 			
 			GardenaBLEDevice_ProcessingErrors($hash, "onetimewaterhandle char value handle does not exist");
 			
-			return "Error: onetimewaterhandle char value handle does not exist."
+			return "Error: onetimewaterhandle char value handle does not exist.";
 		}
 	}
 	elsif(lc $cmd eq 'off') {
@@ -308,7 +408,7 @@ sub GardenaBLEDevice_Set($@) {
 			
 			readingsSingleUpdate( $hash, "state", "set_off", 1 );	
 		 
-			GardenaBLEDevice_CreateParamGatttool( $hash, $mod, $hash->{helper}{$model}{onetimewaterhandle}, sprintf(uc(unpack("H*",pack("v*",0)))."0000") );
+			GardenaBLEDevice_CreateParamGatttool( $hash, $mod, $hash->{helper}{$model}{onetimewaterhandle}, sprintf(uc(unpack("H*",pack("V*",0)))) );
 			GardenaBLEDevice_stateRequest($hash);
 			GardenaBLEDevice_getCharValue($hash, 'one-time-watering-duration');
 		}
@@ -318,24 +418,34 @@ sub GardenaBLEDevice_Set($@) {
 			
 			GardenaBLEDevice_ProcessingErrors($hash, "onetimewaterhandle char value handle does not exist");
 			
-			return "Error: onetimewaterhandle char value handle does not exist."
+			return "Error: onetimewaterhandle char value handle does not exist.";
 		}
 	}
 	elsif(lc $cmd eq 'on-for-timer') {
 		
 		if ($hash->{helper}{$model}{onetimewaterhandle}) {
+			
+			if (@args == 1) {
+				
+				my $value = $args[0];
+			
+				if ($value >= 60 && $value <= 28740) {
 		
-			if ($value > 5 && $value <=65535) {
-		
-				readingsSingleUpdate( $hash, "state", "set_on-for-timer ".$value, 1 );
+					readingsSingleUpdate( $hash, "state", "set_on-for-timer ".$value, 1 );
 
-				GardenaBLEDevice_CreateParamGatttool( $hash, $mod, $hash->{helper}{$model}{onetimewaterhandle}, sprintf(uc(unpack("H*",pack("v*",$value)))."0000") );
-				GardenaBLEDevice_stateRequest($hash);
-				GardenaBLEDevice_getCharValue($hash, 'one-time-watering-duration');
+					GardenaBLEDevice_CreateParamGatttool( $hash, $mod, $hash->{helper}{$model}{onetimewaterhandle}, sprintf(uc(unpack("H*",pack("V*",$value)))) );
+					GardenaBLEDevice_stateRequest($hash);
+					GardenaBLEDevice_getCharValue($hash, 'one-time-watering-duration');
+				}
+				else {
+					$errorParseCmd = 1;
+				}
 			}
 			else {
-				return "Use set <device> on-for-timer [range 5-65535]";
+				$errorParseCmd = 1;
 			}
+			
+			return "Use set <device> on-for-timer [range 60-28740]" if ($errorParseCmd == 1);
 		}
 		else {
 		
@@ -343,38 +453,190 @@ sub GardenaBLEDevice_Set($@) {
 			
 			GardenaBLEDevice_ProcessingErrors($hash, "onetimewaterhandle char value handle does not exist");
 			
-			return "Error: onetimewaterhandle char value handle does not exist."
+			return "Error: onetimewaterhandle char value handle does not exist.";
 		}
 	}
 	elsif(lc $cmd eq 'default-watering-time') {
 		
 		if ($hash->{helper}{$model}{onetimewaterdeftimehandle}) {
+			
+			if (@args == 1) {
+				
+				my $value = $args[0];
+	
+				if ($value >= 60 && $value <= 28740) {
 		
-			if ($value > 5 && $value <=65535) {
-		
-				readingsSingleUpdate( $hash, "state", "set_default-watering-time ".$value, 1 );
+					readingsSingleUpdate( $hash, "state", "set_default-watering-time ".$value, 1 );
 
-				GardenaBLEDevice_CreateParamGatttool( $hash, $mod, $hash->{helper}{$model}{onetimewaterdeftimehandle}, sprintf(uc(unpack("H*",pack("v*",$value)))."0000") );
-				GardenaBLEDevice_stateRequest($hash);
-				GardenaBLEDevice_getCharValue($hash,'one-time-default-watering-time');
+					GardenaBLEDevice_CreateParamGatttool( $hash, $mod, $hash->{helper}{$model}{onetimewaterdeftimehandle}, sprintf(uc(unpack("H*",pack("V*",$value)))) );
+					GardenaBLEDevice_stateRequest($hash);
+					GardenaBLEDevice_getCharValue($hash,'one-time-default-watering-time');
+				}
+				else {
+					$errorParseCmd = 1;
+				}
 			}
 			else {
-				return "Use set <device> default-watering-time [range 5-65535]";
+				$errorParseCmd = 1;
 			}
+			
+			return "Use set <device> default-watering-time [range 60-28740]" if ($errorParseCmd == 1);
 		}
 		else {
 		
-			Log3 $name, 2, "GardenaBLEDevice ($name) - GardenaBLEDevice_Set cmd_default-watering-time: onetimewaterdeftimehandle char value handle does not exist.";
+			Log3 $name, 2, "GardenaBLEDevice ($name) - GardenaBLEDevice_Set c";
 			
 			GardenaBLEDevice_ProcessingErrors($hash, "onetimewaterdeftimehandle char value handle does not exist");
 			
-			return "Error: onetimewaterdeftimehandle char value handle does not exist."
+			return "Error: onetimewaterdeftimehandle char value handle does not exist.";
+		}
+	}
+	elsif(lc $cmd eq lc 'resetGattCount') {
+		
+		Log3 $name, 5, "GardenaBLEDevice ($name) - GardenaBLEDevice_Set set GATTCOUNT to 0.";
+		
+		$hash->{GATTCOUNT}=0;
+	}
+	elsif(lc $cmd eq lc 'synchronizeClock') {
+		
+		#Get current timestamp
+		my $currTime = DateTime->now(time_zone => 'local');
+		
+		#Get current TZ offset in seconds
+		my $tz_offset =  $currTime->time_zone->offset_for_datetime($currTime);
+		
+		#The valve expects local time as unix timestamp, so we've to add the TZ offset
+		my $dstTimestamp = time() + $tz_offset;
+
+		GardenaBLEDevice_CreateParamGatttool( $hash, $mod, $hash->{helper}{$model}{timestamphandle}, sprintf(uc(unpack("H*",pack("V*",$dstTimestamp)))) );
+		GardenaBLEDevice_stateRequest($hash);
+		GardenaBLEDevice_getCharValue($hash,'timestamp');
+
+		Log3 $name, 3, "GardenaBLEDevice ($name) - GardenaBLEDevice_Set synchronizeClock to ".localtime($dstTimestamp-$tz_offset)." ($dstTimestamp epoch time).";
+	}
+	elsif($cmd =~ m/^setSchedule([1-3]{1})$/i) {
+		
+		my $schedule = $1;
+		
+		if ($hash->{helper}{$model}{'schedule'.$1.'wdayshandle'} && $hash->{helper}{$model}{'schedule'.$1.'starttimehandle'} && $hash->{helper}{$model}{'schedule'.$1.'durationhandle'}) {
+			
+			if (@args == 3) {
+			
+				#Parse weekdays
+				if ($args[0] =~ /^((?:mon|tue|wed|thu|fri|sat|sun)(?:,)?)(?1)*$/i) {
+				
+					my @weekdays = split(',',$args[0]);
+				
+					if (@weekdays > 0 && @weekdays <= 7){
+					
+						my $wday_value = 0;
+					
+						foreach (@weekdays) {
+						
+							$wday_value = $wday_value | (1 << 0) if (lc $_ eq 'mon');
+							$wday_value = $wday_value | (1 << 1) if (lc $_ eq 'tue');
+							$wday_value = $wday_value | (1 << 2) if (lc $_ eq 'wed');
+							$wday_value = $wday_value | (1 << 3) if (lc $_ eq 'thu');
+							$wday_value = $wday_value | (1 << 4) if (lc $_ eq 'fri');
+							$wday_value = $wday_value | (1 << 5) if (lc $_ eq 'sat');
+							$wday_value = $wday_value | (1 << 6) if (lc $_ eq 'sun');
+						}
+						#Parse start time
+						if ($args[1] =~ /^([01]\d|2[0-3]):([0-5]\d):([0-5]\d)$/) {
+						
+							#Seconds after midnight
+							my $starttime = $1 * 3600 + $2 * 60 + $3;
+						
+							#Parse watering duration
+							if ($args[2] >= 5 && $args[2] <= 28740){
+								
+								#Writing schedule
+								
+								Log3 $name, 3, "GardenaBLEDevice ($name) - GardenaBLEDevice_Set setSchedule". $schedule . " set weekdays to ".$args[0].".";
+								GardenaBLEDevice_CreateParamGatttool( $hash, $mod, $hash->{helper}{$model}{'schedule'.$schedule.'wdayshandle'}, sprintf(uc(unpack("H*",pack("c*",$wday_value)))) );
+								
+								Log3 $name, 3, "GardenaBLEDevice ($name) - GardenaBLEDevice_Set setSchedule". $schedule . " set start time to ".$args[1].".";
+								GardenaBLEDevice_CreateParamGatttool( $hash, $mod, $hash->{helper}{$model}{'schedule'.$schedule.'starttimehandle'}, sprintf(uc(unpack("H*",pack("V*",$starttime)))) );
+								
+								Log3 $name, 3, "GardenaBLEDevice ($name) - GardenaBLEDevice_Set setSchedule". $schedule . " set duration to ".$args[2].".";
+								GardenaBLEDevice_CreateParamGatttool( $hash, $mod, $hash->{helper}{$model}{'schedule'.$schedule.'durationhandle'}, sprintf(uc(unpack("H*",pack("V*",$args[2])))) );
+								
+								GardenaBLEDevice_stateRequestTimer($hash);
+							}
+							else {
+								$errorParseCmd = 1;
+							}
+						}
+						else {
+							$errorParseCmd = 1;
+						}
+					}
+					else {
+						$errorParseCmd = 1;
+					}
+				}
+				else {
+					$errorParseCmd = 1;
+				}
+			}
+			else {
+				$errorParseCmd = 1;
+			}
+			
+			return "Use set <device> setSchedule[1-3] [Mon,Tue,Wed,Thu,Fri,Sat,Sun] HH:MM:SS [range 5-28740]" if ($errorParseCmd == 1);
+		}
+		else {
+			Log3 $name, 2, "GardenaBLEDevice ($name) - GardenaBLEDevice_Set setSchedule". $schedule ." one of the char value handles does not exist.";
+			
+			GardenaBLEDevice_ProcessingErrors($hash, "one of the setSchedule char value handles does not exist");
+			
+			return "Error: one of the setSchedule char value handles does not exist.";
+		}
+	}
+	elsif($cmd =~m/^(deleteAllSchedules|deleteSchedule([1-3]{1}))$/i) {
+		
+		my $handleMissing=0;
+		my $start;
+		my $end;
+		
+		#Distinguish between individual and all schedule clearing
+		if ($2) {
+			$start=$2;
+			$end=$2;
+		}
+		else {
+			$start=1;
+			$end=3;
+		}
+		
+		foreach my $schedule ($start .. $end) {
+			
+			if ($hash->{helper}{$model}{'schedule'.$schedule.'wdayshandle'} && $hash->{helper}{$model}{'schedule'.$schedule.'starttimehandle'} && $hash->{helper}{$model}{'schedule'.$schedule.'durationhandle'}) {
+			
+				#Writing schedules
+				
+				GardenaBLEDevice_CreateParamGatttool( $hash, $mod, $hash->{helper}{$model}{'schedule'.$schedule.'wdayshandle'}, sprintf(uc(unpack("H*",pack("c*",0)))) );
+			
+				GardenaBLEDevice_CreateParamGatttool( $hash, $mod, $hash->{helper}{$model}{'schedule'.$schedule.'starttimehandle'}, sprintf(uc(unpack("H*",pack("V*",0)))) );
+			
+				GardenaBLEDevice_CreateParamGatttool( $hash, $mod, $hash->{helper}{$model}{'schedule'.$schedule.'durationhandle'}, sprintf(uc(unpack("H*",pack("V*",0)))) );
+			
+				Log3 $name, 2, "GardenaBLEDevice ($name) - GardenaBLEDevice_Set setSchedule schedule". $schedule . " cleared.";
+				
+				GardenaBLEDevice_stateRequestTimer($hash);
+			}
+			else {
+				Log3 $name, 2, "GardenaBLEDevice ($name) - GardenaBLEDevice_Set deleteAllSchedules for schedule ".$schedule.": one of the char value handles does not exist.";
+			
+				GardenaBLEDevice_ProcessingErrors($hash, "one of the deleteAllSchedules for schedule ".$schedule." one of the char value handles does not exist");
+			
+				return "Error: one of the deleteAllSchedules for schedule ".$schedule." char value handles does not exist.";
+			}
 		}
 	}
 	else{
 		return 0;
 	}
-
 }
 
 sub GardenaBLEDevice_Get($$@) {
@@ -427,15 +689,16 @@ sub GardenaBLEDevice_stateRequestTimer($) {
 	my ($hash) = @_;
 
 	my $name = $hash->{NAME};
-
+	my $model = $hash->{MODEL};
+	
 	if ( !IsDisabled($name) ) {
 
 		RemoveInternalTimer($hash);
-
+		
+		readingsSingleUpdate( $hash, "state", "requesting", 1 );
+		
 		#Update relevant information
-		GardenaBLEDevice_stateRequest($hash);
-
-		foreach ('firmware_revision', 'battery', 'timestamp', 'ctrlunitstate', 'one-time-watering-duration', 'one-time-default-watering-time') { 
+		foreach (keys %{%GardenaBLEDevice_Models{$model}}) { 
 			GardenaBLEDevice_getCharValue ($hash, $_); 
 		}
 
@@ -444,7 +707,7 @@ sub GardenaBLEDevice_stateRequestTimer($) {
 		Log3 $name, 5, "GardenaBLEDevice ($name) - stateRequestTimer: Call Request Timer";
 	}
 	else {
-		Log3 $name, 5, "GardenaBLEDevice ($name) - stateRequestTimer: No execution as device disabled.";
+		Log3 $name, 5, "GardenaBLEDevice ($name) - stateRequestTimer: No execution as device is disabled.";
 	}
 }
 
@@ -458,7 +721,7 @@ sub GardenaBLEDevice_getCharValue ($@) {
 	
 	Log3 $name, 5, "GardenaBLEDevice ($name) - getCharValue: ".$uuid;
 	
-	GardenaBLEDevice_CreateParamGatttool( $hash, $mod, $GardenaBLEDevice_Models{$model}{$uuid});
+	GardenaBLEDevice_CreateParamGatttool($hash, $mod, $GardenaBLEDevice_Models{$model}{$uuid});
 }
 
 sub GardenaBLEDevice_CreateParamGatttool($@) {
@@ -483,10 +746,16 @@ sub GardenaBLEDevice_CreateParamGatttool($@) {
 			@param = ($mod, $uuid, $value);
 		}
 		
-		Log3 $name, 4, "GardenaBLEDevice ($name) - Run CreateParamGatttool Another job is running adding to pending: @param";
-	
-		push @{$hash->{helper}{GT_QUEUE}}, \@param;
 		
+		if (@{$hash->{helper}{GT_QUEUE}} < $hash->{MAXGATTQUEUE}) {
+			
+			Log3 $name, 4, "GardenaBLEDevice ($name) - Run CreateParamGatttool Another job is running adding to pending: @param";
+	
+			push @{$hash->{helper}{GT_QUEUE}}, \@param;
+		}
+		else {
+			Log3 $name, 2, "GardenaBLEDevice ($name) - Run CreateParamGatttool Maximum number of jobs reached, dropping newer ones.";
+		}
 		return;
 	}
 
@@ -496,9 +765,14 @@ sub GardenaBLEDevice_CreateParamGatttool($@) {
 		
 		$hash->{helper}{RUNNING_PID} = BlockingCall(
 			"GardenaBLEDevice_ExecGatttool_Run",
-			$name . "|" . $mac . "|" . $mod . "|" . $uuid,
+			$name . "|"
+			. $mac . "|"
+			. $mod . "|"
+			. $hash->{SLEEP_BETWEEN_GATT_CMDS} . "|"
+			. $hash->{BTSECLEVEL} . "|"
+			. $uuid,
 			"GardenaBLEDevice_ExecGatttool_Done",
-			90,
+			$hash->{GATTTIMEOUT},
 			"GardenaBLEDevice_ExecGatttool_Aborted",
 			$hash
 			);
@@ -514,10 +788,12 @@ sub GardenaBLEDevice_CreateParamGatttool($@) {
 			$name . "|"
 			. $mac . "|"
 			. $mod . "|"
+			. $hash->{SLEEP_BETWEEN_GATT_CMDS} . "|"
+			. $hash->{BTSECLEVEL} . "|"
 			. $handle . "|"
-			. $value . "|",
+			. $value,
 			"GardenaBLEDevice_ExecGatttool_Done",
-			90,
+			$hash->{GATTTIMEOUT},
 			"GardenaBLEDevice_ExecGatttool_Aborted",
 			$hash
 		);
@@ -528,7 +804,7 @@ sub GardenaBLEDevice_ExecGatttool_Run($) {
 
 	my $string = shift;
 
-	my ( $name, $mac, $gattCmd, $uuid, $value, $listen ) = split( "\\|", $string );
+	my ( $name, $mac, $gattCmd, $sleep, $seclevel, $uuid, $value ) = split( "\\|", $string );
 	my $gatttool;
 	my $json_response;
 
@@ -544,12 +820,14 @@ sub GardenaBLEDevice_ExecGatttool_Run($) {
 
 		my $hci=AttrVal( $name, "hciDevice", "hci0" );
 
-		$cmd .= "timeout 10 " if ($listen);
+#		$cmd .= "timeout 10 " if ($listen);
 		$cmd .= "gatttool -i $hci -b $mac ";
+		$cmd .= "-l ".$seclevel." ";
 		$cmd .= "--char-read -u $uuid" if ( $gattCmd eq 'read' );
 		$cmd .= "--char-write-req -a $uuid -n $value" if ( $gattCmd eq 'write' );
-		$cmd .= " --listen" if ($listen);
+#		$cmd .= " --listen" if ($listen);
 		$cmd .= " 2>&1 /dev/null";
+		$cmd .= " && sleep ".$sleep;
 
 		my $debug;
 
@@ -656,7 +934,11 @@ sub GardenaBLEDevice_ExecGatttool_Done($) {
 
 	if ( $respstate eq 'ok') {
 		
+		#Increase GATT counter
 		$hash->{GATTCOUNT}++;
+		
+		#Reset error count
+		$hash->{ERRORCOUNT} = 0;
 		
 		if($decode_json->{msg} eq 'char_read_uuid_response'){
 			GardenaBLEDevice_ProcessingCharUUIDResponse( $hash, $gattCmd, $uuid, $decode_json->{handle}, $decode_json->{value});
@@ -678,13 +960,8 @@ sub GardenaBLEDevice_ExecGatttool_Aborted($) {
 	my %readings;
 
 	delete( $hash->{helper}{RUNNING_PID} );
-
-	readingsSingleUpdate( $hash, "state", "unreachable", 1 );
-
-	$readings{'lastGattError'} = 'The BlockingCall Process terminated unexpectedly. Timedout';
-	GardenaBLEDevice_WriteReadings( $hash, \%readings );
-
-	Log3 $name, 3, "GardenaBLEDevice ($name) - ExecGatttool_Aborted: The BlockingCall Process terminated unexpectedly. Timeout";
+	
+	GardenaBLEDevice_ProcessingErrors($hash,'The BlockingCall Process terminated unexpectedly: timed out');
 }
 
 sub GardenaBLEDevice_ProcessingCharUUIDResponse($@) {
@@ -701,6 +978,14 @@ sub GardenaBLEDevice_ProcessingCharUUIDResponse($@) {
 		$readings = GardenaBLEDevice_HandleFirmware($hash, $value);
 	}
 	elsif ( $uuid eq $GardenaBLEDevice_Models{$model}{'timestamp'}) {
+		
+		if (!$hash->{helper}{$model}{timestamphandle}){
+			
+			Log3 $name, 4, "GardenaBLEDevice ($name) - GardenaBLEDevice_ProcessingCharUUIDResponse: Setting timestamphandle char value handle to: $handle";
+			
+			$hash->{helper}{$model}{timestamphandle} = $handle;
+		}
+		
 		$readings = GardenaBLEDevice_WaterControlHandleTimestamp($hash, $value);
 	}
 	elsif ( $uuid eq $GardenaBLEDevice_Models{$model}{'battery'}) {
@@ -734,8 +1019,194 @@ sub GardenaBLEDevice_ProcessingCharUUIDResponse($@) {
 		
 		$readings = GardenaBLEDevice_WaterControlHandleDefaultWateringTime($hash, $value);
 	}
-
+	elsif ( $uuid eq $GardenaBLEDevice_Models{$model}{'schedule1-wdays'} ) {
+		
+		if (!$hash->{helper}{$model}{schedule1wdayshandle}){
+			
+			Log3 $name, 4, "GardenaBLEDevice ($name) - GardenaBLEDevice_ProcessingCharUUIDResponse: Setting schedule1wdayshandle char value handle to: $handle";
+			
+			$hash->{helper}{$model}{schedule1wdayshandle} = $handle;
+		}
+		
+		$readings = GardenaBLEDevice_WaterControlHandleScheduleWday($hash, $value, 'schedule1-weekdays');
+	}
+	elsif ( $uuid eq $GardenaBLEDevice_Models{$model}{'schedule1-starttime'} ) {
+		
+		if (!$hash->{helper}{$model}{schedule1starttimehandle}){
+			
+			Log3 $name, 4, "GardenaBLEDevice ($name) - GardenaBLEDevice_ProcessingCharUUIDResponse: Setting schedule1starttimehandle char value handle to: $handle";
+			
+			$hash->{helper}{$model}{schedule1starttimehandle} = $handle;
+		}
+		
+		$readings = GardenaBLEDevice_WaterControlHandleScheduleStartTime($hash, $value, 'schedule1-starttime');
+	}
+	elsif ( $uuid eq $GardenaBLEDevice_Models{$model}{'schedule1-duration'} ) {
+		
+		if (!$hash->{helper}{$model}{schedule1durationhandle}){
+			
+			Log3 $name, 4, "GardenaBLEDevice ($name) - GardenaBLEDevice_ProcessingCharUUIDResponse: Setting schedule1durationhandle char value handle to: $handle";
+			
+			$hash->{helper}{$model}{schedule1durationhandle} = $handle;
+		}
+		
+		$readings = GardenaBLEDevice_WaterControlHandleScheduleDuration($hash, $value, 'schedule1-duration');
+	}
+	elsif ( $uuid eq $GardenaBLEDevice_Models{$model}{'schedule2-wdays'} ) {
+		
+		if (!$hash->{helper}{$model}{schedule2wdayshandle}){
+			
+			Log3 $name, 4, "GardenaBLEDevice ($name) - GardenaBLEDevice_ProcessingCharUUIDResponse: Setting schedule2wdayshandle char value handle to: $handle";
+			
+			$hash->{helper}{$model}{schedule2wdayshandle} = $handle;
+		}
+		
+		$readings = GardenaBLEDevice_WaterControlHandleScheduleWday($hash, $value, 'schedule2-weekdays');
+	}
+	elsif ( $uuid eq $GardenaBLEDevice_Models{$model}{'schedule2-starttime'} ) {
+		
+		if (!$hash->{helper}{$model}{schedule2starttimehandle}){
+			
+			Log3 $name, 4, "GardenaBLEDevice ($name) - GardenaBLEDevice_ProcessingCharUUIDResponse: Setting schedule2starttimehandle char value handle to: $handle";
+			
+			$hash->{helper}{$model}{schedule2starttimehandle} = $handle;
+		}
+		
+		$readings = GardenaBLEDevice_WaterControlHandleScheduleStartTime($hash, $value, 'schedule2-starttime');
+	}
+	elsif ( $uuid eq $GardenaBLEDevice_Models{$model}{'schedule2-duration'} ) {
+		
+		if (!$hash->{helper}{$model}{schedule2durationhandle}){
+			
+			Log3 $name, 4, "GardenaBLEDevice ($name) - GardenaBLEDevice_ProcessingCharUUIDResponse: Setting schedule2durationhandle char value handle to: $handle";
+			
+			$hash->{helper}{$model}{schedule2durationhandle} = $handle;
+		}
+		
+		$readings = GardenaBLEDevice_WaterControlHandleScheduleDuration($hash, $value, 'schedule2-duration');
+	}
+	elsif ( $uuid eq $GardenaBLEDevice_Models{$model}{'schedule3-wdays'} ) {
+		
+		if (!$hash->{helper}{$model}{schedule3wdayshandle}){
+			
+			Log3 $name, 4, "GardenaBLEDevice ($name) - GardenaBLEDevice_ProcessingCharUUIDResponse: Setting schedule3wdayshandle char value handle to: $handle";
+			
+			$hash->{helper}{$model}{schedule3wdayshandle} = $handle;
+		}
+		
+		$readings = GardenaBLEDevice_WaterControlHandleScheduleWday($hash, $value, 'schedule3-weekdays');
+	}
+	elsif ( $uuid eq $GardenaBLEDevice_Models{$model}{'schedule3-starttime'} ) {
+		
+		if (!$hash->{helper}{$model}{schedule3starttimehandle}){
+			
+			Log3 $name, 4, "GardenaBLEDevice ($name) - GardenaBLEDevice_ProcessingCharUUIDResponse: Setting schedule3starttimehandle char value handle to: $handle";
+			
+			$hash->{helper}{$model}{schedule3starttimehandle} = $handle;
+		}
+		
+		$readings = GardenaBLEDevice_WaterControlHandleScheduleStartTime($hash, $value, 'schedule3-starttime');
+	}
+	elsif ( $uuid eq $GardenaBLEDevice_Models{$model}{'schedule3-duration'} ) {
+		
+		if (!$hash->{helper}{$model}{schedule3durationhandle}){
+			
+			Log3 $name, 4, "GardenaBLEDevice ($name) - GardenaBLEDevice_ProcessingCharUUIDResponse: Setting schedule3durationhandle char value handle to: $handle";
+			
+			$hash->{helper}{$model}{schedule3durationhandle} = $handle;
+		}
+		
+		$readings = GardenaBLEDevice_WaterControlHandleScheduleDuration($hash, $value, 'schedule3-duration');
+	}
 	GardenaBLEDevice_WriteReadings( $hash, $readings );
+}
+
+sub GardenaBLEDevice_WaterControlHandleScheduleDuration($$$) {
+
+	my ( $hash, $value, $reading ) = @_;
+
+	my $name = $hash->{NAME};
+	my %readings;
+	my $duration;
+	
+	Log3 $name, 4, "GardenaBLEDevice ($name) - WaterControlHandleScheduleDuration";
+	
+	$value =~ s/[^a-fA-F0-9]//g;
+
+	#Big to little endian
+	$value =~ /(..)(..)(..)(..)/;
+	my $value_le = $4.$3.$2.$1;
+	
+	$duration = hex("0x".$value_le);
+	
+	Log3 $name, 4, "GardenaBLEDevice ($name) - WaterControlHandleScheduleDuration: setting reading $reading to $duration";
+
+	$readings{$reading} = $duration." seconds";
+	
+	return \%readings;
+}
+
+sub GardenaBLEDevice_WaterControlHandleScheduleStartTime($$$) {
+
+	my ( $hash, $value, $reading ) = @_;
+
+	my $name = $hash->{NAME};
+	my %readings;
+	my $startime;
+	
+	Log3 $name, 4, "GardenaBLEDevice ($name) - WaterControlHandleScheduleStartTime";
+	
+	$value =~ s/[^a-fA-F0-9]//g;
+	
+	#Big to little endian
+	$value =~ /(..)(..)(..)(..)/;
+	my $value_le = $4.$3.$2.$1;
+	
+	my $startTimeSecondsAfterMidnight = hex("0x".$value_le);
+	
+	$startime = sprintf("%02d:%02d:%02d",$startTimeSecondsAfterMidnight / 3600, ($startTimeSecondsAfterMidnight / 60) % 60, $startTimeSecondsAfterMidnight % 60); 
+	
+	Log3 $name, 4, "GardenaBLEDevice ($name) - WaterControlHandleScheduleStartTime: setting reading $reading to $startime";
+	
+	$readings{$reading} = $startime;
+	
+	return \%readings;
+}
+
+sub GardenaBLEDevice_WaterControlHandleScheduleWday($$$) {
+
+	my ( $hash, $value, $reading ) = @_;
+
+	my $name = $hash->{NAME};
+	my %readings;
+	my $weekdays;
+	
+	Log3 $name, 4, "GardenaBLEDevice ($name) - WaterControlHandleScheduleWday";
+	
+	$value =~ s/[^a-fA-F0-9]//g;
+	$value =~ s/([a-fA-F0-9]{2})/hex($1)/eg;
+	
+	if ($value == 0x00) {
+		$weekdays = "n/a";
+	}
+	else {
+		$weekdays .= "Mon" if ( $value & (1 << 0));
+		$weekdays .= ",Tue" if ( $value & (1 << 1));
+		$weekdays .= ",Wed" if ( $value & (1 << 2));
+		$weekdays .= ",Thu" if ( $value & (1 << 3));
+		$weekdays .= ",Fri" if ( $value & (1 << 4));
+		$weekdays .= ",Sat" if ( $value & (1 << 5));
+		$weekdays .= ",Sun" if ( $value & (1 << 6));
+	
+		$weekdays =~ s/^,//;
+		$weekdays =~ s/,$//;
+	}
+
+	Log3 $name, 4, "GardenaBLEDevice ($name) - WaterControlHandleScheduleWday: setting reading $reading to $weekdays";
+
+	$readings{$reading} = $weekdays;
+	
+	return \%readings;
 }
 
 #Read firwmare via UUID 0x2a26 (Firmware Revision String)
@@ -775,7 +1246,7 @@ sub GardenaBLEDevice_WaterControlHandleTimestamp($$) {
 	
 	my $timestamp = hex("0x".$value_le);
 	
-	$readings{'deviceTime'} = scalar(gmtime($timestamp));
+	$readings{'deviceTime'} = strftime('%Y-%m-%d %H:%M:%S', gmtime($timestamp));
 	
 	return \%readings;
 }
@@ -795,7 +1266,7 @@ sub GardenaBLEDevice_WaterControlHandleBattery($$) {
 	
 	$readings{'batteryLevel'} = $batterylevel."%";
 	
-	if ($batterylevel <= 10) {
+	if ($batterylevel <= 33) {
 		
 		$readings{'battery'} = "low";
 	}
@@ -917,10 +1388,43 @@ sub GardenaBLEDevice_ProcessingErrors($$) {
 	my %readings;
 
 	Log3 $name, 5, "GardenaBLEDevice ($name) - ProcessingErrors";
+	
+	#Increase error count
+	$hash->{ERRORCOUNT}++;
+	
+	if ($hash->{ERRORCOUNT} >= $hash->{MAXERRORCOUNT}) {
+	
+		GardenaBLEDevice_Disable($hash);
+		readingsSingleUpdate( $hash, "state", "disabled (error)", 1 );
+		Log3 $name, 2, "GardenaBLEDevice ($name) - disabled because MAXERRORCOUNT of ". $hash->{MAXERRORCOUNT} ." reached";
+		
+	}
+	else {
+		$readings{'lastGattError'} = $value;
+		GardenaBLEDevice_WriteReadings( $hash, \%readings );
+	}
+}
 
-	$readings{'lastGattError'} = $value;
-
-	GardenaBLEDevice_WriteReadings( $hash, \%readings );
+sub GardenaBLEDevice_Disable ($){
+	
+	my $hash = shift;
+	my $name = $hash->{NAME};
+	
+	#Set attribute disable
+	$attr{$name}{disable} = 1;
+	
+	RemoveInternalTimer($hash);
+	
+	BlockingKill( $hash->{helper}{RUNNING_PID} ) if ( defined( $hash->{helper}{RUNNING_PID} ) );
+	
+	@{$hash->{helper}{GT_QUEUE}} = ();
+	
+	readingsSingleUpdate( $hash, "state", "disabled", 1 );
+	
+	#Reset error count
+	$hash->{ERRORCOUNT} = 0;
+	
+	Log3 $name, 3, "GardenaBLEDevice ($name) - disabled";
 }
 
 1;
